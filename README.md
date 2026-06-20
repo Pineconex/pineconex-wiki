@@ -210,6 +210,10 @@ Each entry shows the data source, timeframe, date range, and row count. Use the 
 | **Saxo Bank** | European equities (DAX, CAC40, AEX, BEL20) + US equities. Requires a connected Saxo account. |
 | **Massive** | Broad market data via the Massive API. |
 
+### Data retention
+
+Fetched market data is cached so repeat jobs run instantly without re-downloading. A dataset that hasn't been used by any job for an extended period is automatically removed from the catalog to save storage. Nothing is lost permanently — the next backtest, sweep, or walk-forward that needs it simply re-fetches it from the source, and any dataset that is still in regular use is never evicted.
+
 ---
 
 ## Brokers
