@@ -251,6 +251,7 @@ Upgrade your plan under **Account → Plan**.
 
 ## Support
 
+- **Website:** [pineconex.com](https://pineconex.com)
 - **Telegram:** link shown on the Support page inside the app.
 - **Email:** support@pineconex.com
 - **General inquiries:** info@pineconex.com
