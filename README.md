@@ -24,6 +24,8 @@ PineconEx is a SaaS platform for backtesting and live-trading **Pine Script v6**
 
 Sign in at [pineconex.com](https://pineconex.com) with your **Google account**. No separate registration is required.
 
+> **Tip:** We recommend signing in with your GitHub account — it enables seamless version management of your strategies directly from your repositories.
+
 On first login you are placed on the **Free** plan. A free trial period gives you temporary access to Pro features so you can explore the platform before committing.
 
 ---
