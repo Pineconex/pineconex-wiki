@@ -132,7 +132,7 @@ PineconEx reads the `minval` and `maxval` from each annotated input to define th
 | **Random** | Uniform random sampling across all swept parameters. Fast, unbiased exploration. |
 | **Bayesian** | Surrogate UCB optimiser. Explores efficiently — finds good regions with far fewer trials than Grid. |
 | **Monte Carlo** | Simulated annealing with random restarts. Good at escaping local optima. |
-| **RBF Optimise** | Cubic RBF surrogate model. Fewest evaluations needed; smart interpolation between sample points. |
+| **RBF Optimise** | Cubic RBF surrogate model. Fewest evaluations needed; smart interpolation between sample points. Based on [Costa & Nannicini, *RBFOpt* (2016)](https://arxiv.org/pdf/1605.00998.pdf). |
 
 ### Results
 
