@@ -208,6 +208,7 @@ Each entry shows the data source, timeframe, date range, and row count. Use the 
 | Source | Coverage |
 |--------|----------|
 | **Saxo Bank** | European equities (DAX, CAC40, AEX, BEL20) + US equities. Requires a connected Saxo account. |
+| **Alpaca** | US equities. |
 | **Massive** | Broad market data via the Massive API. |
 
 ### Data retention
