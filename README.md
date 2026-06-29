@@ -50,8 +50,8 @@ Link your GitHub account under **Account → GitHub**, then use **Import from Gi
 Open a strategy and click the **Share** button. You can make it:
 
 - **Private** — only you can see it.
-- **Open** — anyone with the link can view the code and results.
-- **Protected** — link required plus you grant access per user.
+- **Open** — anyone with the link gets a private, editable **copy** of the strategy added to their own account (a fork). They get the full code, but as their own copy — your original is untouched.
+- **Protected** — link required *plus* you grant access per user. Granted users can run backtests and live bots with the strategy, but the **source code stays private** — it is never shown to them. The strategy is shared; the code is not.
 
 ### Parameter overrides (JSON5)
 
@@ -71,6 +71,18 @@ Format:
 ```
 
 Keys must match the variable names of your `input.*()` calls. The Params editor validates them against the parsed inputs in real time.
+
+### Trading costs & fill realism
+
+The engine simulates the standard Pine Script v6 `strategy()` cost and fill-assumption arguments, so your backtests can reflect real-world frictions. These apply to **Backtest, Parameter Sweep, and Walk-Forward** runs (live bots submit real orders instead):
+
+| Argument | Effect |
+|----------|--------|
+| `commission_type` + `commission_value` | Per-trade commission, charged on both legs. Three modes: `strategy.commission.percent` (% of each fill's value), `strategy.commission.cash_per_contract` (fixed cash per share/contract), and `strategy.commission.cash_per_order` (flat cash per order). |
+| `slippage` | Worsens the fill price of every **market and stop** order by a number of ticks (0.01 price units): buys fill higher, sells fill lower. Limit / take-profit fills are exempt. |
+| `backtest_fill_limits_assumption` | Models unfilled limit orders: a limit (take-profit) order only fills after price moves this many ticks *past* its price, instead of the moment price touches it. |
+
+All default to no cost (`0`), so a strategy without these arguments backtests frictionlessly. See the inline comments in the default strategy template for exact syntax.
 
 ---
 
@@ -194,6 +206,16 @@ Running bots are listed with their status (`running`, `stopped`, `failed`). Clic
 ### Auto-restart
 
 When auto-restart is on, the platform will restart the bot automatically if it crashes, up to a configured limit. The restart count is shown on the bot card.
+
+### How orders are executed
+
+It is important to understand how a live bot turns a strategy signal into a broker order:
+
+- **Bots act on bar close.** On each new completed bar, the bot evaluates your strategy. When the strategy opens or closes a position, the bot submits a **market order** to your connected broker at that moment.
+- **The reported price is the bar close (the signal price), not the actual fill.** PineconEx records and displays the entry/exit at the closing price of the signal bar. The bot submits the order but does **not** read back the broker's true execution price — so any **slippage** between the signal price and the real fill is not reflected in PineconEx.
+- **PineconEx does not track your live profit & loss.** It records lifecycle events (started, stopped, crashed) and the signals it acted on, but it does not reconcile actual fills, partial fills, or rejections. **Your broker account is the source of truth** for real positions, fills, and P&L — always confirm there.
+
+> Because of this, live results can differ from a backtest even on identical signals: a backtest fills at modelled prices, while a live order fills at whatever the market gives you. Treat the bot's reported prices as the *signal* price, and your broker statement as the *settled* price.
 
 ---
 
