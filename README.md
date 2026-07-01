@@ -84,6 +84,31 @@ The engine simulates the standard Pine Script v6 `strategy()` cost and fill-assu
 
 All default to no cost (`0`), so a strategy without these arguments backtests frictionlessly. See the inline comments in the default strategy template for exact syntax.
 
+### Position sizing
+
+By default a strategy trades **one share/contract per order**. Control the order size with the standard Pine Script v6 `strategy()` arguments `default_qty_type` and `default_qty_value`:
+
+| `default_qty_type` | Order size |
+|--------------------|-----------|
+| `strategy.fixed` | Exactly `default_qty_value` shares/contracts. |
+| `strategy.cash` | As many whole shares as `default_qty_value` (in account currency) buys — `floor(value / price)`. |
+| `strategy.percent_of_equity` | A position worth `default_qty_value` % of account equity — `floor(equity × value / 100 / price)`. |
+
+```pine
+strategy("My strategy", default_qty_type = strategy.percent_of_equity, default_qty_value = 10)
+```
+
+**Live bots — things to know:**
+
+- **Whole shares only.** Equity orders are rounded **down** to whole shares; if the computed size is below one share the order is skipped. (Crypto keeps fractional size.) Because of the round-down, a `cash` or `percent_of_equity` order usually deploys slightly *less* than the nominal amount — e.g. $5,000 of a $294 stock buys 16 shares (≈ $4,714), not a fractional 16.9.
+- **`percent_of_equity` uses your real broker equity.** A live bot reads your connected account's current equity to size the order and refreshes it as the account value changes. Backtest, sweep, and walk-forward runs use the strategy's `initial_capital` instead.
+
+### Pyramiding
+
+`strategy(pyramiding = N)` caps how many entries may be added in the **same direction** while a position is open. The default, `pyramiding = 0`, allows a single entry — additional same-direction entry signals are ignored until the position is closed. A reversal (an opposite-direction entry) is always allowed.
+
+> **Current limitation:** a bot or backtest holds **one position at a time**, so a strategy trades a single lot regardless of the `pyramiding` value — setting it above `0` does not yet stack multiple lots.
+
 ---
 
 ## Backtest
