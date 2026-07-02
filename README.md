@@ -117,6 +117,8 @@ Set it explicitly (0–5000) only when the depth can't be known ahead of time �
 
 > Built-in series (`close[n]`, …) and `ta.*` functions always see full history regardless of this setting — it only bounds *user-variable* lookback.
 
+> **Indexing an indicator's past value:** assign it to a **variable first**, then index the variable — `e = ta.ema(close, 20)` then `e[1]`. Indexing the call directly (`(ta.ema(close, 20))[1]`) returns `na` on PineconeX, unlike TradingView.
+
 ---
 
 ## Backtest
