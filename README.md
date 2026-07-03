@@ -286,17 +286,15 @@ Connect a broker under **Account** or on the **Live** page.
 
 > The simulation environment (`sim`) uses Saxo's paper-trading gateway. Recommended for testing before going live.
 
-### Interactive Brokers
+### Alpaca
 
-A browser-based OAuth connection to IBKR that does not require TWS to be running locally.
+Connect an Alpaca account to trade US equities.
 
-1. Click **Connect IBKR Web**.
-2. Log in via IBKR's OAuth page.
-3. After authorisation, the connection is active.
+1. Click **Connect Alpaca** and choose **Paper** or **Live** environment.
+2. Enter your Alpaca API key and secret.
+3. After connecting, your account is linked and ready to trade.
 
-### Lightspeed Connect
-
-Enter your Lightspeed API key, account ID, and environment. Optionally provide a custom WebSocket URL for advanced setups.
+> The paper environment uses Alpaca's paper-trading API. Recommended for testing before going live.
 
 ---
 
