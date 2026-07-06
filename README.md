@@ -238,6 +238,10 @@ Deploy a strategy as a live bot that connects to a broker and executes orders in
 
 Running bots are listed with their status (`running`, `stopped`, `failed`). Click **Logs** on any bot to stream its container output in real time. Bot lifecycle events (started, stopped, crashed, restarted) are recorded in the event log and can be exported as CSV.
 
+If Telegram notifications are configured, each bot also sends a periodic **heartbeat**. A multi-symbol basket sends a single combined overview — one message with a per-symbol table (price, position, live P&L) and a net-P&L summary, colored green/red by profit and loss:
+
+![Telegram heartbeat overview for a multi-symbol basket](images/telegram-heartbeat.png)
+
 ### Auto-restart
 
 When auto-restart is on, the platform will restart the bot automatically if it crashes, up to a configured limit. The restart count is shown on the bot card.
