@@ -1,6 +1,6 @@
 # PineconeX Documentation
 
-> **Version:** v0.1.0-alpha
+> **Version:** v0.1.1-alpha · **Last updated:** 2026-07-07
 
 PineconeX is a SaaS platform for backtesting and live-trading **Pine Script v6** strategies against real market data. Write your strategy once — backtest it, sweep its parameters, walk-forward validate it, then deploy it live against a connected broker, all from the same interface.
 
@@ -74,7 +74,7 @@ Format:
 
 - **`tf`** — the primary bar resolution for that config.
 - **`htf`** — optional **higher** timeframe (for `request.security`). On the Backtest form it pre-selects the higher-timeframe dataset; on live bots it maps to your strategy's `htf` input.
-- **`ltf`** — optional **lower / intrabar** timeframe (for `request.security_lower_tf`). It pre-selects the **Intrabar TF** dataset on the Backtest form. (Not used by live bots, which don't run intrabar.)
+- **`ltf`** — optional **lower / intrabar** timeframe (for `request.security_lower_tf`). On the Backtest form it pre-selects the **Intrabar TF** dataset; on a live bot it sets the intrabar warmup resolution fetched from the broker feed. (Sweep and walk-forward support intrabar too, but pick it from their own form control rather than from this key.)
 
 All three timeframe keys accept the same [timeframe strings](#timeframe-syntax) as the pickers.
 
