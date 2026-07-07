@@ -63,17 +63,20 @@ Format:
   {
     symbol: "AAPL",
     configs: [
-      { tf: "1D", htf: "1W", length: 20, threshold: 0.5 },
+      { tf: "1D", htf: "1W", ltf: "60m", length: 20, threshold: 0.5 },
       { tf: "60m", length: 10 }
     ]
   }
 ]
 ```
 
-`symbol`, `tf`, and `htf` are **reserved keys**; every other key must match the variable name of one of your `input.*()` calls. The Params editor validates them against the parsed inputs in real time.
+`symbol`, `tf`, `htf`, and `ltf` are **reserved keys**; every other key must match the variable name of one of your `input.*()` calls. The Params editor validates them against the parsed inputs in real time.
 
 - **`tf`** — the primary bar resolution for that config.
-- **`htf`** — optional higher timeframe; maps to your strategy's `htf` input if it uses one.
+- **`htf`** — optional **higher** timeframe (for `request.security`). On the Backtest form it pre-selects the higher-timeframe dataset; on live bots it maps to your strategy's `htf` input.
+- **`ltf`** — optional **lower / intrabar** timeframe (for `request.security_lower_tf`). It pre-selects the **Intrabar TF** dataset on the Backtest form. (Not used by live bots, which don't run intrabar.)
+
+All three timeframe keys accept the same [timeframe strings](#timeframe-syntax) as the pickers.
 
 #### Timeframe syntax
 
