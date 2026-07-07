@@ -158,8 +158,8 @@ Run a single backtest of a strategy against a historical dataset.
 | **Strategy** | Select a strategy from your library. |
 | **Symbol / Index** | Pick the market index, then the individual symbol. |
 | **Timeframe** | Bar resolution for the primary series (`1M`, `1W`, `1D`, `90m`, `60m`, `30m`, `15m`, `5m`, `1m`). See [Timeframe syntax](#timeframe-syntax). |
-| **Higher timeframe** | Optional — maps to the `htf` input if your strategy uses one. |
-| **Intrabar TF** | Optional — maps to an intrabar resolution input. |
+| **Higher timeframe** | Optional — the `request.security` series. Pre-fillable from the `htf` key in your [JSON5 params](#parameter-overrides-json5). |
+| **Intrabar TF** | Optional — the `request.security_lower_tf` (intrabar) series. Pre-fillable from the `ltf` key in your [JSON5 params](#parameter-overrides-json5). |
 | **Date range** | Start and end date for the historical window. |
 | **Data source** | Saxo Bank or Massive. Saxo is the default for European equities. |
 
