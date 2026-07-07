@@ -328,7 +328,7 @@ Connect an Alpaca account to trade US equities.
 
 ---
 
-## Plans
+## Plans *
 
 | | Free | Pro | Premium |
 |--|------|-----|-----|
@@ -342,6 +342,8 @@ Connect an Alpaca account to trade US equities.
 GitHub-imported strategies do not count against the strategy quota on any plan.
 
 Upgrade your plan under **Account → Plan**.
+
+> **(*)** This table is non-binding and may fall out of sync. The [pricing page](https://pineconex.com/#pricing) is the authoritative source for plan features and limits.
 
 ---
 
