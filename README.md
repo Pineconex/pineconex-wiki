@@ -64,13 +64,36 @@ Format:
     symbol: "AAPL",
     configs: [
       { tf: "1D", htf: "1W", length: 20, threshold: 0.5 },
-      { tf: "4H", length: 10 }
+      { tf: "60m", length: 10 }
     ]
   }
 ]
 ```
 
-Keys must match the variable names of your `input.*()` calls. The Params editor validates them against the parsed inputs in real time.
+`symbol`, `tf`, and `htf` are **reserved keys**; every other key must match the variable name of one of your `input.*()` calls. The Params editor validates them against the parsed inputs in real time.
+
+- **`tf`** — the primary bar resolution for that config.
+- **`htf`** — optional higher timeframe; maps to your strategy's `htf` input if it uses one.
+
+#### Timeframe syntax
+
+Timeframes use a uniform, minute-based notation everywhere in PineconeX (the Params JSON5, the Data catalog, and the Backtest / Sweep / Walk-Forward / Live pickers). Use these exact strings — they are case-sensitive:
+
+| String | Resolution |
+|--------|-----------|
+| `1m`   | 1 minute |
+| `5m`   | 5 minutes |
+| `15m`  | 15 minutes |
+| `30m`  | 30 minutes |
+| `60m`  | 1 hour |
+| `90m`  | 90 minutes |
+| `1D`   | Daily |
+| `1W`   | Weekly |
+| `1M`   | Monthly |
+
+Intraday resolutions are written in **minutes** (`<n>m`); daily and above use `1D` / `1W` / `1M`. The legacy `1H` (= `60m`) and `4H` (= `240m`) aliases are still accepted for backward compatibility, but prefer the minute form.
+
+> **Live bots** trade the broker feed directly (no stored dataset), so they omit weekly/monthly and the 1-minute step — the available live timeframes are `5m`, `15m`, `30m`, `60m`, `90m`, `1D`. Keep a config's `tf` within this set if you plan to run it live.
 
 ### Trading costs & fill realism
 
@@ -131,7 +154,7 @@ Run a single backtest of a strategy against a historical dataset.
 |-------|-------------|
 | **Strategy** | Select a strategy from your library. |
 | **Symbol / Index** | Pick the market index, then the individual symbol. |
-| **Timeframe** | Bar resolution for the primary series (1D, 4H, 1H, 15m, 5m, …). |
+| **Timeframe** | Bar resolution for the primary series (`1M`, `1W`, `1D`, `90m`, `60m`, `30m`, `15m`, `5m`, `1m`). See [Timeframe syntax](#timeframe-syntax). |
 | **Higher timeframe** | Optional — maps to the `htf` input if your strategy uses one. |
 | **Intrabar TF** | Optional — maps to an intrabar resolution input. |
 | **Date range** | Start and end date for the historical window. |
@@ -230,7 +253,7 @@ Deploy a strategy as a live bot that connects to a broker and executes orders in
 
 1. Go to **Live** and connect a broker (see [Brokers](#brokers)).
 2. Select a strategy and symbol.
-3. Choose the timeframe (1D, 1H, 15m, 5m).
+3. Choose the timeframe (`5m`, `15m`, `30m`, `60m`, `90m`, `1D` — see [Timeframe syntax](#timeframe-syntax)).
 4. Enable **Auto-restart** if you want the bot to restart automatically after a crash.
 5. Click **Launch**.
 
