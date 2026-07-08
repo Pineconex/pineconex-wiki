@@ -333,7 +333,7 @@ Each window is shown as a card with its in-sample and out-of-sample metrics. The
 
 Deploy a strategy as a live bot that connects to a broker and executes orders in real time.
 
-> **Pro or Premium plan required.** Live trading is not available on the Free plan.
+> **Available on every plan.** The Free plan includes **1 live trading job** with a limited lifetime (bots are stopped at the end of the trading day); Pro and Premium raise the concurrency limit and run without that daily stop.
 
 ### Launching a bot
 
@@ -417,7 +417,7 @@ Connect an Alpaca account to trade US equities.
 |--|------|-----|-----|
 | Strategies | 5 | Unlimited | Unlimited |
 | Concurrent jobs | 1 | 5 | 10 |
-| Live trading | — | Yes | Yes |
+| Live trading | 1 job (limited lifetime) | Yes | Yes |
 | Backtesting | Yes | Yes | Yes |
 | Parameter sweep | Yes | Yes | Yes |
 | Walk-forward | Yes | Yes | Yes |
