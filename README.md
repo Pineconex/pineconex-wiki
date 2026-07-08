@@ -2,7 +2,7 @@
 
 > **Version:** v0.1.1-alpha · **Last updated:** 2026-07-07
 
-PineconeX is a SaaS platform for backtesting and live-trading **Pine Script v6** strategies against real market data. Write your strategy once — backtest it, sweep its parameters, walk-forward validate it, then deploy it live against a connected broker, all from the same interface.
+PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6** strategies against real market data. Write your strategy once — backtest it, sweep its parameters, walk-forward validate it, then deploy it live against a connected broker, all from the same interface.
 
 ---
 
@@ -40,7 +40,7 @@ The **Strategies** page is your library of Pine Script v6 strategies. Each strat
 
 PineconeX runs standard **Pine Script v6**, so the official TradingView documentation is your primary language reference:
 
-- **[Pine Script v6 User Manual](https://www.tradingview.com/pine-script-docs/en/v6/)** — the language guide: syntax, types, execution model, and how-to tutorials.
+- **[Pine Script v6 User Manual](https://www.tradingview.com/pine-script-docs/)** — the language guide: syntax, types, execution model, and how-to tutorials.
 - **[Pine Script v6 Reference Manual](https://www.tradingview.com/pine-script-reference/v6/)** — the full API reference for every built-in function, variable, and keyword (`ta.*`, `strategy.*`, `str.*`, …).
 - **[TradingView Community Scripts](https://www.tradingview.com/scripts/)** — thousands of published open-source strategies and indicators to learn from and adapt.
 
