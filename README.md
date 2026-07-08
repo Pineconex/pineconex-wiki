@@ -10,7 +10,9 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script v6**
 
 - [Getting started](#getting-started)
 - [Strategies](#strategies)
+  - [Learning Pine Script v6](#learning-pine-script-v6)
 - [Backtest](#backtest)
+- [Debugging with log.info()](#debugging-with-loginfo)
 - [Parameter Sweep](#parameter-sweep)
 - [Walk-Forward Analysis](#walk-forward-analysis)
 - [Live Trading](#live-trading)
@@ -33,6 +35,16 @@ On first login you are placed on the **Free** plan. A free trial period gives yo
 ## Strategies
 
 The **Strategies** page is your library of Pine Script v6 strategies. Each strategy has a Monaco-based code editor with Pine Script syntax highlighting and an inline validator that catches errors before you submit a job.
+
+### Learning Pine Script v6
+
+PineconeX runs standard **Pine Script v6**, so the official TradingView documentation is your primary language reference:
+
+- **[Pine Script v6 User Manual](https://www.tradingview.com/pine-script-docs/en/v6/)** — the language guide: syntax, types, execution model, and how-to tutorials.
+- **[Pine Script v6 Reference Manual](https://www.tradingview.com/pine-script-reference/v6/)** — the full API reference for every built-in function, variable, and keyword (`ta.*`, `strategy.*`, `str.*`, …).
+- **[TradingView Community Scripts](https://www.tradingview.com/scripts/)** — thousands of published open-source strategies and indicators to learn from and adapt.
+
+> **PineconeX runs Pine headless** — there is no chart, so chart/UI calls (`plot`, `hline`, drawings, tables, …) are accepted but silently ignored, and a few primitives diverge from TradingView (e.g. `alertcondition()` is repurposed for notifications, indexing an indicator call directly returns `na`). The language is the same; the runtime is backtest/live execution rather than a chart. These differences are called out throughout this guide where they matter.
 
 ### Creating a strategy
 
@@ -177,6 +189,77 @@ Once the job completes, the results page shows:
 ### Comparing backtests
 
 Select up to **5 completed backtests** from the history list using the checkboxes, then click **Compare**. The comparison view overlays equity curves and places metrics side by side for easy evaluation.
+
+---
+
+## Debugging with `log.info()`
+
+When a strategy isn't trading the way you expect, the fastest way to see *why* is to print the values your logic depends on. PineconeX supports the standard Pine Script v6 logging functions:
+
+| Function | Use for |
+|----------|---------|
+| `log.info(msg)` | General trace output — values, flags, "did this branch run?" |
+| `log.warning(msg)` | Something unusual but non-fatal. |
+| `log.error(msg)` | A condition your strategy treats as a hard problem. |
+
+Each message shows up in the run's **Logs** panel (Backtest, Sweep, and Walk-Forward results all have one), and streams live in a bot's **Logs** view for live trading. In a backtest each line is prefixed with the **bar timestamp** it was emitted on, so you can line the output up against the chart.
+
+### Printing values
+
+`log.*` takes a **single string** argument — so to print a number, a boolean, or a series value you convert it with `str.tostring()` and join the pieces with `+`:
+
+```pine
+//@version=6
+strategy("Debug demo", overlay = true)
+
+fast = ta.ema(close, 10)
+slow = ta.ema(close, 30)
+cross_up = ta.crossover(fast, slow)
+
+// Print the values every bar
+log.info("close=" + str.tostring(close) + " fast=" + str.tostring(fast, "0.00") + " slow=" + str.tostring(slow, "0.00") + " cross_up=" + str.tostring(cross_up))
+
+if cross_up
+    strategy.entry("Long", strategy.long)
+    log.info("ENTRY long @ " + str.tostring(close, "0.00"))
+```
+
+A few things to know:
+
+- **`str.tostring(value, "0.00")`** applies a format string — here, two decimal places. Handy for prices and indicator values that would otherwise print a long float.
+- **Booleans and `na` print directly** — `str.tostring(cross_up)` gives `true` / `false`, and a `na` value prints as `na`, so you can see exactly when a value is missing.
+- **Series and `ta.*` results log their current-bar value automatically.** You don't need to index them — `str.tostring(ta.rsi(close, 14))` prints this bar's RSI. (To inspect a *past* value, assign it to a variable first and index that: `r = ta.rsi(close, 14)` then `str.tostring(r[1])` — see the note on [indexing indicator values](#history-buffer-max_bars_back).)
+- **No `{0}` placeholders.** Unlike TradingView, PineconeX does not support format-placeholder logging (`log.info("x={0}", x)`) — only the first argument is read, so build the whole string with `+`.
+
+### Tracing *why* a signal did or didn't fire
+
+The most useful pattern is logging the individual conditions that gate an entry, so you can see which one is blocking:
+
+```pine
+long_ok = cross_up and close > slow and strategy.position_size == 0
+
+if ta.crossover(fast, slow)
+    log.info("cross seen | above_slow=" + str.tostring(close > slow) + " flat=" + str.tostring(strategy.position_size == 0) + " -> entry=" + str.tostring(long_ok))
+```
+
+Now every time the EMAs cross you get one line showing exactly which guard passed or failed — far quicker than guessing.
+
+### Keep the log readable
+
+Logging **every bar** floods the panel and (for live bots) counts against the captured-log size cap. Gate your debug output behind the condition you actually care about so you only print on the interesting bars:
+
+```pine
+// Only log around a potential signal, not on every bar
+if cross_up or cross_down
+    log.info("signal bar: " + str.tostring(close, "0.00"))
+```
+
+> **Tip:** Leave the `log.*` calls gated behind an `input.bool(false, "Debug")` toggle so you can flip verbose tracing on and off without editing the strategy:
+> ```pine
+> debug = input.bool(false, "Debug logging")
+> if debug
+>     log.info("state: " + str.tostring(myVar))
+> ```
 
 ---
 
