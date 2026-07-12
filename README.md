@@ -2,7 +2,7 @@
 
 > **Version:** v0.1.1-alpha · **Last updated:** 2026-07-07
 
-PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6** strategies against real market data. Write your strategy once — backtest it, sweep its parameters, walk-forward validate it, then deploy it live against a connected broker, all from the same interface.
+PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6** strategies against real market data. Write your strategy once — backtest it, sweep its parameters, validate that the edge is real, then deploy it live against a connected broker, all from the same interface.
 
 ---
 
@@ -14,7 +14,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Backtest](#backtest)
 - [Debugging with log.info()](#debugging-with-loginfo)
 - [Parameter Sweep](#parameter-sweep)
-- [Walk-Forward Analysis](#walk-forward-analysis)
+- [Validation](#validation)
 - [Live Trading](#live-trading)
 - [Market Data](#market-data)
 - [Brokers](#brokers)
@@ -51,7 +51,7 @@ PineconeX runs standard **Pine Script v6**, so the official TradingView document
 1. Click **New strategy**.
 2. Give it a name and paste or write your Pine Script v6 `strategy()` code.
 3. Click **Validate** to check for syntax errors.
-4. Save — the strategy is now available in the Backtest, Sweep, Walk-Forward, and Live launchers.
+4. Save — the strategy is now available in the Backtest, Sweep, Validation, and Live launchers.
 
 ### Importing from GitHub
 
@@ -86,13 +86,13 @@ Format:
 
 - **`tf`** — the primary bar resolution for that config.
 - **`htf`** — optional **higher** timeframe (for `request.security`). On the Backtest form it pre-selects the higher-timeframe dataset; on live bots it maps to your strategy's `htf` input.
-- **`ltf`** — optional **lower / intrabar** timeframe (for `request.security_lower_tf`). On the Backtest form it pre-selects the **Intrabar TF** dataset; on a live bot it sets the intrabar warmup resolution fetched from the broker feed. (Sweep and walk-forward support intrabar too, but pick it from their own form control rather than from this key.)
+- **`ltf`** — optional **lower / intrabar** timeframe (for `request.security_lower_tf`). On the Backtest form it pre-selects the **Intrabar TF** dataset; on a live bot it sets the intrabar warmup resolution fetched from the broker feed. (Sweep supports intrabar too, but picks it from its own form control rather than from this key. The Significance test rejects an intrabar series — see [Validation](#validation).)
 
 All three timeframe keys accept the same [timeframe strings](#timeframe-syntax) as the pickers.
 
 #### Timeframe syntax
 
-Timeframes use a uniform, minute-based notation everywhere in PineconeX (the Params JSON5, the Data catalog, and the Backtest / Sweep / Walk-Forward / Live pickers). Use these exact strings — they are case-sensitive:
+Timeframes use a uniform, minute-based notation everywhere in PineconeX (the Params JSON5, the Data catalog, and the Backtest / Sweep / Validation / Live pickers). Use these exact strings — they are case-sensitive:
 
 | String | Resolution |
 |--------|-----------|
@@ -112,7 +112,7 @@ Intraday resolutions are written in **minutes** (`<n>m`); daily and above use `1
 
 ### Trading costs & fill realism
 
-The engine simulates the standard Pine Script v6 `strategy()` cost and fill-assumption arguments, so your backtests can reflect real-world frictions. These apply to **Backtest, Parameter Sweep, and Walk-Forward** runs (live bots submit real orders instead):
+The engine simulates the standard Pine Script v6 `strategy()` cost and fill-assumption arguments, so your backtests can reflect real-world frictions. These apply to **Backtest, Parameter Sweep, and Validation** runs (live bots submit real orders instead):
 
 | Argument | Effect |
 |----------|--------|
@@ -139,7 +139,7 @@ strategy("My strategy", default_qty_type = strategy.percent_of_equity, default_q
 **Live bots — things to know:**
 
 - **Whole shares only.** Equity orders are rounded **down** to whole shares; if the computed size is below one share the order is skipped. (Crypto keeps fractional size.) Because of the round-down, a `cash` or `percent_of_equity` order usually deploys slightly *less* than the nominal amount — e.g. $5,000 of a $294 stock buys 16 shares (≈ $4,714), not a fractional 16.9.
-- **`percent_of_equity` uses your real broker equity.** A live bot reads your connected account's current equity to size the order and refreshes it as the account value changes. Backtest, sweep, and walk-forward runs use the strategy's `initial_capital` instead.
+- **`percent_of_equity` uses your real broker equity.** A live bot reads your connected account's current equity to size the order and refreshes it as the account value changes. Backtest, sweep, and validation runs use the strategy's `initial_capital` instead.
 
 ### Pyramiding
 
@@ -202,7 +202,7 @@ When a strategy isn't trading the way you expect, the fastest way to see *why* i
 | `log.warning(msg)` | Something unusual but non-fatal. |
 | `log.error(msg)` | A condition your strategy treats as a hard problem. |
 
-Each message shows up in the run's **Logs** panel (Backtest, Sweep, and Walk-Forward results all have one), and streams live in a bot's **Logs** view for live trading. In a backtest each line is prefixed with the **bar timestamp** it was emitted on, so you can line the output up against the chart.
+Each message shows up in the run's **Logs** panel (Backtest, Sweep, and Validation results all have one), and streams live in a bot's **Logs** view for live trading. In a backtest each line is prefixed with the **bar timestamp** it was emitted on, so you can line the output up against the chart.
 
 ### Printing values
 
@@ -301,31 +301,70 @@ Sweeps and backtests run under a maximum wall-clock time. A job that exceeds its
 
 ---
 
-## Walk-Forward Analysis
+## Validation
 
-Walk-forward analysis guards against overfitting by repeatedly training on a window of history and immediately testing on the unseen period that follows.
+A backtest tells you what happened. Validation asks whether to believe it.
 
-### How it works
+Both tests place your result against a distribution the strategy was **not** fitted to — that is
+what separates them from a backtest with different settings. **Premium plan.**
 
-The total date range is split into **N windows**. For each window:
+### Significance — is the edge real, or luck?
 
-1. An in-sample period is used to optimise the strategy (via the configured sweep mode).
-2. The best parameters found are applied to the immediately following out-of-sample period.
-3. The out-of-sample result is recorded.
+The price series is **bar-permuted** hundreds of times: each bar is decomposed into its gap and its
+intrabar moves, those are shuffled independently, and valid OHLC bars are rebuilt. The result keeps
+the return distribution and the candle geometry but **destroys the cross-bar sequence** — the very
+thing a strategy claims to exploit.
 
-The final result is the concatenation of all out-of-sample periods, giving a realistic picture of how the strategy would have performed had you been re-optimising it live.
-
-### Configuration
+The strategy is re-run on every permutation, giving a null distribution of what it scores on noise.
+The **p-value** is how often noise did as well as the real thing. Low = the edge is structural.
 
 | Field | Description |
 |-------|-------------|
-| **Windows** | Number of train/test splits. More windows → shorter each, more data points. |
-| **In-sample split** | Percentage of each window used for training (e.g. 70 % in-sample, 30 % out-of-sample). |
-| **Trials per window** | Bayesian optimisation trials per in-sample period. |
+| **Permutations** | Null-distribution size (default 200). The smallest p-value you can measure is 1/(N+1), so N=50 can never report below 0.02. |
+| **Test statistic** | `Net P&L %` (default), `Profit factor`, or `Win rate`. |
+| **Permutation type** | **Bar** destroys all serial structure. **Block** shuffles N-bar chunks, preserving structure shorter than N — a less strict null for longer-horizon edges. |
+| **How the parameters were chosen** | See below. This is the most important control on the page. |
+| **Seed** | Omit for a time-seeded run; the effective seed is echoed so any run is reproducible. |
 
-### Results
+#### The p-value trap
 
-Each window is shown as a card with its in-sample and out-of-sample metrics. The combined out-of-sample equity curve is plotted at the top.
+The default, **Fixed params**, re-runs the strategy's authored input defaults on every permutation.
+Its null is *"what this one rule scores on noise"* — which is only valid if you chose those numbers
+**without looking at the data**.
+
+But the obvious workflow is the opposite: run a Sweep, take the winner, paste it in as the default,
+then test it. There, a fixed null is **optimistically biased**. It cannot see that you tried 157
+candidates, and the best of 157 noise draws is high *by construction* — that is data-mining bias,
+and no number of permutations fixes it.
+
+So tell the test what you actually did. Pick the same search you ran (Grid, Random, Bayesian, …)
+and it is **re-run inside every permutation**, so the null becomes *"the best score this strategy
+family can be fitted to noise"*. Optimize with Bayesian, test with Bayesian.
+
+This costs what it is worth: `Fixed` is one backtest per permutation, `Grid` is the entire grid. A
+200-permutation test over a 157-point grid is 31,400 backtests. The price of the correction is
+proportional to the bias it removes.
+
+#### Out-of-sample
+
+There is no separate mode, because out-of-sample is a **date range**. Sweep on 2016–2019, then run
+Significance on 2020 with the parameters fixed. Those bars were never touched by the search, so
+`Fixed` is the *correct* null there — there is no search to correct for.
+
+> An intrabar timeframe is rejected. Sub-bar structure cannot be synthesized from permuted bars, so
+> intra-bar stop/limit fills would be priced against a path that does not exist.
+
+### Stress — which market does the strategy need?
+
+An Ornstein-Uhlenbeck process with Poisson jumps is calibrated to your real series, then a grid of
+**half-life × jump intensity** is simulated and the strategy is run over many synthetic paths per
+cell. The output is an **operating envelope**: the regions where it survives, and how much jump risk
+it absorbs before it breaks.
+
+> **This is not a significance test, and must not be read as one.** The generator makes mean
+> reversion true *by construction*, so a mean-reversion strategy beating it proves nothing, and a
+> trend-follower will look bad for reasons that have nothing to do with fragility. Run **Significance
+> first** as the gate — Stress only discriminates among strategies that already passed it.
 
 ---
 
@@ -383,7 +422,7 @@ Each entry shows the data source, timeframe, date range, and row count. Use the 
 
 ### Data retention
 
-Fetched market data is cached so repeat jobs run instantly without re-downloading. A dataset that hasn't been used by any job for an extended period is automatically removed from the catalog to save storage. Nothing is lost permanently — the next backtest, sweep, or walk-forward that needs it simply re-fetches it from the source, and any dataset that is still in regular use is never evicted.
+Fetched market data is cached so repeat jobs run instantly without re-downloading. A dataset that hasn't been used by any job for an extended period is automatically removed from the catalog to save storage. Nothing is lost permanently — the next backtest, sweep, or validation run that needs it simply re-fetches it from the source, and any dataset that is still in regular use is never evicted.
 
 ---
 
@@ -420,7 +459,7 @@ Connect an Alpaca account to trade US equities.
 | Live trading | 1 job (limited lifetime) | Yes | Yes |
 | Backtesting | Yes | Yes | Yes |
 | Parameter sweep | Yes | Yes | Yes |
-| Walk-forward | Yes | Yes | Yes |
+| Validation (significance + stress) | — | — | Yes |
 
 GitHub-imported strategies do not count against the strategy quota on any plan.
 
