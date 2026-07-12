@@ -315,56 +315,81 @@ intrabar moves, those are shuffled independently, and valid OHLC bars are rebuil
 the return distribution and the candle geometry but **destroys the cross-bar sequence** — the very
 thing a strategy claims to exploit.
 
-The strategy is re-run on every permutation, giving a null distribution of what it scores on noise.
-The **p-value** is how often noise did as well as the real thing. Low = the edge is structural.
+Your strategy is then run against every one of those scrambled series. If it only made money because
+it happened to catch real moves in the real order, it will fall apart on them. If it keeps making
+money on scrambled prices, it was never reading the market — it was reading the return distribution,
+which any rule can do.
+
+The headline number is how often the scrambled series did **as well as or better than** the real
+one. Two out of two hundred means your result is hard to get by luck. Ninety out of two hundred
+means it is not.
 
 | Field | Description |
 |-------|-------------|
-| **Permutations** | Null-distribution size (default 200). The smallest p-value you can measure is 1/(N+1), so N=50 can never report below 0.02. |
-| **Test statistic** | `Net P&L %` (default), `Profit factor`, or `Win rate`. |
-| **Permutation type** | **Bar** destroys all serial structure. **Block** shuffles N-bar chunks, preserving structure shorter than N — a less strict null for longer-horizon edges. |
-| **How the parameters were chosen** | See below. This is the most important control on the page. |
-| **Seed** | Omit for a time-seeded run; the effective seed is echoed so any run is reproducible. |
+| **Permutations** | How many scrambled series to test against (default 200). More is finer-grained: with only 50, the best result you can possibly report is "1 in 51". |
+| **Test statistic** | What counts as "doing well" — `Net P&L %` (default), `Profit factor`, or `Win rate`. |
+| **Permutation type** | **Bar** scrambles every bar independently — the strictest test. **Block** shuffles chunks of N bars, keeping short-term patterns intact. Use Block if your edge is meant to play out over days rather than bars. |
+| **Where the settings came from** | The most important control on the page. See below. |
+| **Seed** | Leave empty for a random run. The seed used is reported back, so any run can be reproduced exactly. |
 
-#### The p-value trap
+#### If you found your settings with a Sweep, say so
 
-The default, **Fixed params**, re-runs the strategy's authored input defaults on every permutation.
-Its null is *"what this one rule scores on noise"* — which is only valid if you chose those numbers
-**without looking at the data**.
+This is the one setting that can quietly invalidate the whole test.
 
-But the obvious workflow is the opposite: run a Sweep, take the winner, paste it in as the default,
-then test it. There, a fixed null is **optimistically biased**. It cannot see that you tried 157
-candidates, and the best of 157 noise draws is high *by construction* — that is data-mining bias,
-and no number of permutations fixes it.
+**Fixed params** (the default) runs your strategy with the numbers written into the script, exactly
+as they are, on every shuffled series. That is the right test *if you chose those numbers yourself*
+— from theory, from a book, from experience.
 
-So tell the test what you actually did. Pick the same search you ran (Grid, Random, Bayesian, …)
-and it is **re-run inside every permutation**, so the null becomes *"the best score this strategy
-family can be fitted to noise"*. Optimize with Bayesian, test with Bayesian.
+It is the **wrong** test if you found them with a Sweep.
 
-This costs what it is worth: `Fixed` is one backtest per permutation, `Grid` is the entire grid. A
-200-permutation test over a 157-point grid is 31,400 backtests. The price of the correction is
-proportional to the bias it removes.
+Here is why. A Sweep tries many combinations and hands you the best one. Try enough combinations on
+*random* data and one of them will look good too — that is guaranteed, and the more you tried, the
+better the winner looks. So a strategy whose settings came out of a Sweep starts with a head start
+that has nothing to do with the market. Testing it as if you had picked those numbers by hand hides
+that head start completely, and gives you a reassuring result you have not earned. Running more
+shuffles does not help: the bias is in *how the settings were found*, not in how many times you test
+them.
+
+So tell it what you actually did. Pick the same search you ran — Grid, Random, Bayesian, and so on —
+and that entire search is repeated against every shuffled series. Now your strategy has to beat not
+just noise, but *the best result anyone could squeeze out of noise by tuning just as hard as you
+did*. That is a fair fight, and it is the only one worth winning.
+
+Expect it to be **much slower**. Fixed params runs your strategy once per shuffle; any other option
+re-runs your whole Sweep per shuffle. A test that took seconds can take tens of minutes — and the
+bigger the Sweep you ran, the longer it takes, because the bigger the Sweep, the more of a head
+start there is to cancel out.
 
 #### Out-of-sample
 
-There is no separate mode, because out-of-sample is a **date range**. Sweep on 2016–2019, then run
-Significance on 2020 with the parameters fixed. Those bars were never touched by the search, so
-`Fixed` is the *correct* null there — there is no search to correct for.
+There is no separate mode, because out-of-sample is a **date range**. Sweep the parameters on an
+earlier slice of history, then run Significance on a later slice you held back — with the parameters
+fixed. Those bars were never seen by the search, so **Fixed params is the right choice there**:
+there was no search on that data to correct for.
 
-> An intrabar timeframe is rejected. Sub-bar structure cannot be synthesized from permuted bars, so
-> intra-bar stop/limit fills would be priced against a path that does not exist.
+> An intrabar timeframe is not allowed here. Scrambling the bars invents a price path that never
+> happened, and there is no honest way to say where inside such a bar a stop or limit would have
+> filled. Rather than give you a plausible-looking number built on a fiction, the test refuses to
+> run. Drop the intrabar timeframe and try again.
 
 ### Stress — which market does the strategy need?
 
-An Ornstein-Uhlenbeck process with Poisson jumps is calibrated to your real series, then a grid of
-**half-life × jump intensity** is simulated and the strategy is run over many synthetic paths per
-cell. The output is an **operating envelope**: the regions where it survives, and how much jump risk
-it absorbs before it breaks.
+Instead of shuffling your real prices, Stress **invents new markets**. It measures two things about
+your instrument — how strongly it snaps back after a move, and how often it gaps violently — then
+simulates a whole grid of markets around those values: calmer and choppier, quieter and more
+jump-prone. Your strategy is run over many simulated price paths in each one.
 
-> **This is not a significance test, and must not be read as one.** The generator makes mean
-> reversion true *by construction*, so a mean-reversion strategy beating it proves nothing, and a
-> trend-follower will look bad for reasons that have nothing to do with fragility. Run **Significance
-> first** as the gate — Stress only discriminates among strategies that already passed it.
+The result is a map of **where your strategy works**: which market conditions it needs, and how much
+sudden gap risk it can absorb before it breaks. A strategy that only survives in one small corner of
+that map is one to be careful with — real markets do not stay in a corner.
+
+> **Stress cannot tell you whether your edge is real — only Significance can.** The markets it
+> invents are built to snap back after a move, so a mean-reversion strategy will look good on them no
+> matter what, and a trend-following one will look bad no matter what. Neither result means anything
+> on its own.
+>
+> **Run Significance first.** If your strategy cannot beat scrambled prices, nothing Stress says
+> matters. Once it has passed, Stress tells you which markets it needs in order to keep working.
 
 ---
 
