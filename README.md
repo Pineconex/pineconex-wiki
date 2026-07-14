@@ -4,7 +4,7 @@
 
 PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6** strategies against real market data. Write your strategy once — backtest it, sweep its parameters, validate that the edge is real, then deploy it live against a connected broker, all from the same interface.
 
-**Equities and crypto.** Alongside European and US stocks, PineconeX trades **crypto** — ~130 USD and ~126 EUR pairs on **Bitstamp**, and ~29 USD pairs on **Alpaca**. Crypto markets never close, and the venues' order models differ from an equity broker's in ways that change how a stop-loss behaves — [read this before deploying a crypto bot](#crypto).
+**Equities and crypto.** Alongside European and US stocks, PineconeX trades **crypto** — USD and EUR spot pairs on **Bitstamp**, and the US-dollar pairs on **Alpaca**. Crypto markets never close, and the venues' order models differ from an equity broker's in ways that change how a stop-loss behaves — [read this before deploying a crypto bot](#crypto).
 
 ---
 
@@ -438,7 +438,7 @@ It is important to understand how a live bot turns a strategy signal into a brok
 
 ### Crypto
 
-Crypto trades on **Alpaca** (~29 USD pairs) and **Bitstamp** (~130 USD + ~126 EUR pairs). Pick the symbol under the **Crypto (USD)** or **Crypto (EUR)** index.
+Crypto trades on **Bitstamp** (USD and EUR spot pairs) and **Alpaca** (US-dollar pairs). Pick the symbol under the **Crypto (USD)** or **Crypto (EUR)** index — the symbol list shows which venues carry it.
 
 Your Pine Script does not change. What the *broker* does underneath changes a great deal, and the single most important difference is **what actually protects your position**:
 
@@ -471,8 +471,8 @@ Each entry shows the data source, timeframe, date range, and row count. Use the 
 |--------|----------|-------|
 | **Yahoo** | Equities + crypto | The default. No account needed. **Will not serve any intraday range older than 730 days** — for older intraday bars, use Bitstamp (crypto) or Saxo (equities). |
 | **Saxo Bank** | European equities (DAX, CAC40, AEX, BEL20) + US equities | Requires a connected Saxo account. Saxo carries no crypto. |
-| **Alpaca** | US equities + crypto (~29 USD pairs) | Requires a connected Alpaca account. Crypto history **begins 2021-01-01**. |
-| **Bitstamp** | Crypto — ~130 USD + ~126 EUR pairs, and a few FX pairs | **No account or API key needed** — it is a public feed. Timeframes `1m`, `5m`, `15m`, `30m`, `60m`, `1D`. |
+| **Alpaca** | US equities + US-dollar crypto pairs | Requires a connected Alpaca account. Crypto history **begins 2021-01-01**. |
+| **Bitstamp** | Crypto — USD and EUR spot pairs, plus a few FX pairs | **No account or API key needed** — it is a public feed. Timeframes `1m`, `5m`, `15m`, `30m`, `60m`, `1D`. |
 | **Massive** | Broad market data via the Massive API | — |
 | **Interactive Brokers** | Equities | Requires IBKR (TWS/Gateway) configured. |
 
@@ -500,7 +500,7 @@ Connect a broker under **Account** or on the **Live** page.
 
 ### Alpaca
 
-Connect an Alpaca account to trade US equities **and crypto** (~29 USD pairs).
+Connect an Alpaca account to trade US equities **and crypto** (the US-dollar pairs).
 
 1. Click **Connect Alpaca** and choose **Paper** or **Live** environment.
 2. Enter your Alpaca API key and secret.
@@ -510,7 +510,7 @@ Connect an Alpaca account to trade US equities **and crypto** (~29 USD pairs).
 
 ### Bitstamp
 
-Bitstamp is a crypto **exchange** — ~130 USD and ~126 EUR spot pairs. Your coins and cash sit at Bitstamp itself and orders go into its own book.
+Bitstamp is a crypto **exchange** — USD and EUR spot pairs. Your coins and cash sit at Bitstamp itself and orders go into its own book.
 
 1. Create an API key on Bitstamp with permissions to **trade**, **view your balances**, and **view your transactions**.
 2. Click **Connect Bitstamp** and choose **Sandbox** or **Live**.
