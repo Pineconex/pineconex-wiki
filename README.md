@@ -1,8 +1,10 @@
 # PineconeX Documentation
 
-> **Version:** v0.1.1-alpha · **Last updated:** 2026-07-07
+> **Version:** v0.1.3-alpha · **Last updated:** 2026-07-14
 
 PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6** strategies against real market data. Write your strategy once — backtest it, sweep its parameters, validate that the edge is real, then deploy it live against a connected broker, all from the same interface.
+
+**Equities and crypto.** Alongside European and US stocks, PineconeX trades **crypto** — ~130 USD and ~126 EUR pairs on **Bitstamp**, and ~29 USD pairs on **Alpaca**. Crypto markets never close, and the venues' order models differ from an equity broker's in ways that change how a stop-loss behaves — [read this before deploying a crypto bot](#crypto).
 
 ---
 
@@ -16,7 +18,9 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Parameter Sweep](#parameter-sweep)
 - [Validation](#validation)
 - [Live Trading](#live-trading)
+  - [Crypto](#crypto)
 - [Market Data](#market-data)
+  - [Supported sources](#supported-sources)
 - [Brokers](#brokers)
 - [Plans](#plans)
 
@@ -173,7 +177,7 @@ Run a single backtest of a strategy against a historical dataset.
 | **Higher timeframe** | Optional — the `request.security` series. Pre-fillable from the `htf` key in your [JSON5 params](#parameter-overrides-json5). |
 | **Intrabar TF** | Optional — the `request.security_lower_tf` (intrabar) series. Pre-fillable from the `ltf` key in your [JSON5 params](#parameter-overrides-json5). |
 | **Date range** | Start and end date for the historical window. |
-| **Data source** | Saxo Bank or Massive. Saxo is the default for European equities. |
+| **Data source** | Which feed the bars come from — Yahoo, Saxo, Alpaca, Bitstamp, Massive or IBKR. Only the sources that actually carry the selected symbol are offered. See [Supported sources](#supported-sources). |
 
 ### Results
 
@@ -423,11 +427,35 @@ When auto-restart is on, the platform will restart the bot automatically if it c
 
 It is important to understand how a live bot turns a strategy signal into a broker order:
 
-- **Bots act on bar close.** On each new completed bar, the bot evaluates your strategy. When the strategy opens or closes a position, the bot submits a **market order** to your connected broker at that moment.
-- **The reported price is the bar close (the signal price), not the actual fill.** PineconeX records and displays the entry/exit at the closing price of the signal bar. The bot submits the order but does **not** read back the broker's true execution price — so any **slippage** between the signal price and the real fill is not reflected in PineconeX.
-- **PineconeX does not track your live profit & loss.** It records lifecycle events (started, stopped, crashed) and the signals it acted on, but it does not reconcile actual fills, partial fills, or rejections. **Your broker account is the source of truth** for real positions, fills, and P&L — always confirm there.
+- **Bots act on bar close.** On each new completed bar, the bot evaluates your strategy. A plain `strategy.entry` becomes a **market order** at that moment.
+- **`limit=` and `stop=` become real broker orders.** `strategy.entry(limit=…)` places an actual resting limit order at your broker — it may fill later, or never. And `strategy.exit(limit=…, stop=…)` places a native **OCO** pair on Saxo and Alpaca equities: a resting stop and a resting take-profit, linked by the broker so that whichever one fills cancels the other. The stop moves as your strategy trails it.
+- **The entry price is the broker's real fill, not the bar close.** The bot reads the executed price back from the broker (Saxo, Alpaca, Bitstamp), so `strategy.position_avg_price` — and any stop or target computed from it — is based on what you actually paid, not on a bar close that is already minutes stale.
+- **PineconeX does not track your live profit & loss.** It records lifecycle events (started, stopped, crashed) and the signals it acted on, but it does not reconcile partial fills or rejections into a running P&L. **Your broker account is the source of truth** for real positions, fills, and P&L — always confirm there.
 
-> Because of this, live results can differ from a backtest even on identical signals: a backtest fills at modelled prices, while a live order fills at whatever the market gives you. Treat the bot's reported prices as the *signal* price, and your broker statement as the *settled* price.
+> Live results can still differ from a backtest on identical signals: a backtest fills at modelled prices at the bar close, while a live order fills at whatever the market gives you — and a live resting stop can be hit *inside* a bar, where a backtest would only have seen the bar's close. The divergence is by design: live is native, backtest is simulated.
+
+> **Stopping a live bot does not close its position or cancel its resting orders.** The bot is shut down; whatever it holds, and any stop/take-profit orders it left at the broker, remain there unmanaged. Close them yourself in your broker's interface.
+
+### Crypto
+
+Crypto trades on **Alpaca** (~29 USD pairs) and **Bitstamp** (~130 USD + ~126 EUR pairs). Pick the symbol under the **Crypto (USD)** or **Crypto (EUR)** index.
+
+Your Pine Script does not change. What the *broker* does underneath changes a great deal, and the single most important difference is **what actually protects your position**:
+
+| Venue | Stop-loss | Take-profit |
+|-------|-----------|-------------|
+| **Saxo** / **Alpaca equities** | Native, resting at the broker | Native, resting at the broker (OCO — a fill on one cancels the other) |
+| **Alpaca crypto** | Native, resting at the broker | **Managed by the bot** — crypto allows only *one* resting exit, and that slot is given to the stop. The bot checks the target at each bar close and, when hit, cancels the stop and closes at market. |
+| **Bitstamp** | **Managed by the bot** — Bitstamp spot has **no stop order at all** | Managed by the bot |
+
+> **A Bitstamp stop-loss is not held at the exchange.** Bitstamp's spot market has no stop orders, no take-profits and no OCO — the API even *accepts* a stop price and answers `200 OK` with an order id, while creating nothing. So PineconeX never claims one: on Bitstamp, your stop is enforced **by the bot, at bar close**. If price gaps straight through your stop level between two bars, the bot exits on the next bar close, at whatever the market is then — not at your stop price. On a 24/7 market that gap is a real risk. Size accordingly, and prefer a shorter timeframe if the stop matters to you.
+
+Other crypto specifics worth knowing:
+
+- **Crypto never closes.** There is no session, no end-of-day. A bot on a 5m crypto chart runs through the night and the weekend.
+- **Size is fractional.** Unlike equities, crypto orders are not rounded down to whole units — `0.0134` BTC is a valid order.
+- **Fees land in different places.** On Alpaca the fee is taken **in the coin** (order 0.001 BTC, own slightly less); on Bitstamp it is taken **in the cash** (order 0.0002 BTC, receive exactly 0.0002 BTC). The bot sizes its exits from what the broker says you actually hold, so this does not strand dust — but it explains why the filled quantity may not equal the ordered one on Alpaca.
+- **Neither venue allows shorting crypto.** A short entry is refused.
 
 ---
 
@@ -439,11 +467,18 @@ Each entry shows the data source, timeframe, date range, and row count. Use the 
 
 ### Supported sources
 
-| Source | Coverage |
-|--------|----------|
-| **Saxo Bank** | European equities (DAX, CAC40, AEX, BEL20) + US equities. Requires a connected Saxo account. |
-| **Alpaca** | US equities. |
-| **Massive** | Broad market data via the Massive API. |
+| Source | Coverage | Notes |
+|--------|----------|-------|
+| **Yahoo** | Equities + crypto | The default. No account needed. **Will not serve any intraday range older than 730 days** — for older intraday bars, use Bitstamp (crypto) or Saxo (equities). |
+| **Saxo Bank** | European equities (DAX, CAC40, AEX, BEL20) + US equities | Requires a connected Saxo account. Saxo carries no crypto. |
+| **Alpaca** | US equities + crypto (~29 USD pairs) | Requires a connected Alpaca account. Crypto history **begins 2021-01-01**. |
+| **Bitstamp** | Crypto — ~130 USD + ~126 EUR pairs, and a few FX pairs | **No account or API key needed** — it is a public feed. Timeframes `1m`, `5m`, `15m`, `30m`, `60m`, `1D`. |
+| **Massive** | Broad market data via the Massive API | — |
+| **Interactive Brokers** | Equities | Requires IBKR (TWS/Gateway) configured. |
+
+The source list offered for a symbol is filtered to the sources that actually carry it — a source that has no ticker for the symbol is not selectable.
+
+> **For deep intraday crypto history, use Bitstamp.** It is the only source that reaches it: Yahoo cuts intraday off at 730 days and Alpaca's crypto data starts in 2021, while Bitstamp's public series goes back to **2011** and quotes real BTC/USD (not a USDT proxy). A multi-year hourly Bitcoin backtest is only reproducible from this source.
 
 ### Data retention
 
@@ -465,13 +500,30 @@ Connect a broker under **Account** or on the **Live** page.
 
 ### Alpaca
 
-Connect an Alpaca account to trade US equities.
+Connect an Alpaca account to trade US equities **and crypto** (~29 USD pairs).
 
 1. Click **Connect Alpaca** and choose **Paper** or **Live** environment.
 2. Enter your Alpaca API key and secret.
 3. After connecting, your account is linked and ready to trade.
 
 > The paper environment uses Alpaca's paper-trading API. Recommended for testing before going live.
+
+### Bitstamp
+
+Bitstamp is a crypto **exchange** — ~130 USD and ~126 EUR spot pairs. Your coins and cash sit at Bitstamp itself and orders go into its own book.
+
+1. Create an API key on Bitstamp with permissions to **trade**, **view your balances**, and **view your transactions**.
+2. Click **Connect Bitstamp** and choose **Sandbox** or **Live**.
+3. Paste the key and secret. They are verified against Bitstamp before they are stored.
+
+> **Sandbox is Bitstamp's only paper mode** — `Live` is real money on the real exchange. There is no third option.
+
+> **The "view your transactions" permission is not optional.** Bitstamp's order status carries no fill price, so a bot's *only* way to learn what its order actually paid is your transaction history. A key without that permission is rejected at connect rather than failing mid-trade.
+
+Two things about Bitstamp that do not apply to a stock broker, and that will otherwise surprise you:
+
+- **A spot holding is a balance, not a position.** Bitstamp stores no average entry price anywhere, so a bot reconstructs its cost basis from your fill history. A coin that was **deposited** (or bought more than 30 days ago, outside the API's transaction window) has no purchase price the bot can find — so it **refuses to trade that holding** and says so in the log, rather than inventing an entry price and computing wrong P&L, stops and take-profits from it. **Fund a Bitstamp bot's account by buying the coin, not by depositing it.**
+- **Spot is long-only.** A short entry is refused — there is nothing to borrow.
 
 ---
 
