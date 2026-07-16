@@ -288,11 +288,33 @@ PineconeX reads the `minval` and `maxval` from each annotated input to define th
 
 | Mode | Description |
 |------|-------------|
+| **RBF Optimise** | Cubic RBF surrogate model. Fewest evaluations needed; smart interpolation between sample points. The only mode that *steers* — it hill-climbs the chosen objective. Based on [Costa & Nannicini, *RBFOpt* (2016)](https://arxiv.org/pdf/1605.00998.pdf). |
 | **Grid** | Exhaustive 2-D grid over the two swept parameters. Best when you need to see the full landscape. |
 | **Random** | Uniform random sampling across all swept parameters. Fast, unbiased exploration. |
-| **Bayesian** | Surrogate UCB optimiser. Explores efficiently — finds good regions with far fewer trials than Grid. |
-| **Monte Carlo** | Simulated annealing with random restarts. Good at escaping local optima. |
-| **RBF Optimise** | Cubic RBF surrogate model. Fewest evaluations needed; smart interpolation between sample points. Based on [Costa & Nannicini, *RBFOpt* (2016)](https://arxiv.org/pdf/1605.00998.pdf). |
+
+### Objective
+
+The steering mode (RBF Optimise) hill-climbs a single number — the **objective**. Grid and Random
+don't steer, so they have no objective: they emit every trial and you rank the results afterwards
+by any metric.
+
+Built-in objectives: `net_pnl_pct` (default), `return_over_dd`, `sharpe`, `profit_factor`,
+`expectancy`, `win_rate`, and `max_dd_pct` (minimised).
+
+**Custom expression.** Pick *Custom expression…* to write your own objective as an arithmetic
+formula over the trial metrics, for example:
+
+```
+net_pnl_pct - 0.5 * max_dd_pct + 0.1 * trades
+```
+
+- Variables: `net_pnl_pct`, `max_dd_pct`, `trades`, `win_rate`, `profit_factor`, `expectancy`,
+  `sharpe`, `return_over_dd`. Operators: `+ - * / ( )` and numbers.
+- The search **maximises** the expression as written — a penalty term gets a minus sign.
+  `max_dd_pct` is a positive percentage (a 12% drawdown is `12`), so subtract it to punish risk.
+- A trial below the **Min trades** floor can never win, custom objectives included — otherwise a
+  config that barely trades can score arbitrarily well (a division by zero, e.g. a zero-drawdown
+  fluke in `pnl / dd`, is also disqualified rather than winning by infinity).
 
 ### Results
 
@@ -331,7 +353,7 @@ means it is not.
 | Field | Description |
 |-------|-------------|
 | **Permutations** | How many scrambled series to test against (default 200). More is finer-grained: with only 50, the best result you can possibly report is "1 in 51". |
-| **Test statistic** | What counts as "doing well" — `Net P&L %` (default), `Profit factor`, or `Win rate`. |
+| **Test statistic** | What counts as "doing well" — `Net P&L %` (default), `Return / drawdown`, `Sharpe`, `Profit factor`, `Expectancy`, `Win rate`, or a **custom expression** over the trial metrics (same syntax as the Sweep objective, e.g. `net_pnl_pct - 0.5 * max_dd_pct`). It is both the reported statistic and, for a searching procedure, the objective the search hill-climbs inside every permutation. |
 | **Permutation type** | **Bar** scrambles every bar independently — the strictest test. **Block** shuffles chunks of N bars, keeping short-term patterns intact. Use Block if your edge is meant to play out over days rather than bars. |
 | **Where the settings came from** | The most important control on the page. See below. |
 | **Seed** | Leave empty for a random run. The seed used is reported back, so any run can be reproduced exactly. |
@@ -354,7 +376,7 @@ that head start completely, and gives you a reassuring result you have not earne
 shuffles does not help: the bias is in *how the settings were found*, not in how many times you test
 them.
 
-So tell it what you actually did. Pick the same search you ran — Grid, Random, Bayesian, and so on —
+So tell it what you actually did. Pick the same search you ran — Grid, Random, or RBF —
 and that entire search is repeated against every shuffled series. Now your strategy has to beat not
 just noise, but *the best result anyone could squeeze out of noise by tuning just as hard as you
 did*. That is a fair fight, and it is the only one worth winning.
