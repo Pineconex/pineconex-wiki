@@ -430,6 +430,8 @@ PineconeX does not train models for you and does not host a training environment
 finished model. The format is **ONNX**, the open standard that PyTorch, TensorFlow/Keras and
 scikit-learn can all export to.
 
+> **Machine learning models are a [Premium](#plans) feature.**
+
 > **A model is not an edge.** Bolting a neural network onto six popular indicators does not create
 > alpha — those features have been mined by everyone for decades, and a model fit to them usually
 > learns nothing that survives out-of-sample. Treat ML as one more thing to **validate**, not as a
@@ -447,8 +449,8 @@ old versions stay available so a strategy pinned to one keeps working.
   few KB to a few MB; only very deep forests or sequence models approach the cap.
 - On upload the file is checked to be a valid ONNX graph, and its input width (number of features)
   is read from it. A file that is not ONNX, or is too large, is rejected with a message.
-- How many models you may store depends on your plan (see [Plans](#plans)). Delete an old model or
-  version to free a slot.
+- Machine learning models are a **Premium** feature (see [Plans](#plans)); on Premium you may store
+  any number of them.
 
 ### Calling a model from Pine
 
@@ -699,10 +701,15 @@ Two things about Bitstamp that do not apply to a stock broker, and that will oth
 |--|------|-----|-----|
 | Strategies | 5 | Unlimited | Unlimited |
 | Concurrent jobs | 1 | 5 | 10 |
-| Live trading | 1 job (limited lifetime) | Yes | Yes |
 | Backtesting | Yes | Yes | Yes |
 | Parameter sweep | Yes | Yes | Yes |
 | Validation (significance + stress) | — | — | Yes |
+| Machine learning models | — | — | Yes |
+| Live trading | 1 job (limited lifetime) | Yes | Yes |
+| Telegram notifications | — | Yes | Yes |
+| Webhook signals | — | Yes | Yes |
+| Multi-timeframe support | — | — | Yes |
+| On-premise hosted infrastructure | — | Yes | Yes |
 
 GitHub-imported strategies do not count against the strategy quota on any plan.
 
