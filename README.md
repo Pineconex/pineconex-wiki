@@ -1,6 +1,6 @@
 # PineconeX Documentation
 
-> **Version:** v0.1.4-alpha · **Last updated:** 2026-07-17
+> **Version:** v0.1.4-alpha
 
 PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6** strategies against real market data. Write your strategy once — backtest it, sweep its parameters, validate that the edge is real, then deploy it live against a connected broker, all from the same interface.
 
