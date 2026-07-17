@@ -17,6 +17,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Debugging with log.info()](#debugging-with-loginfo)
 - [Parameter Sweep](#parameter-sweep)
 - [Validation](#validation)
+- [Machine Learning Models](#machine-learning-models)
 - [Live Trading](#live-trading)
   - [Crypto](#crypto)
 - [Market Data](#market-data)
@@ -416,6 +417,149 @@ that map is one to be careful with — real markets do not stay in a corner.
 >
 > **Run Significance first.** If your strategy cannot beat scrambled prices, nothing Stress says
 > matters. Once it has passed, Stress tells you which markets it needs in order to keep working.
+
+---
+
+## Machine Learning Models
+
+You can train a model **offline** — in Python, on your own machine — and then call it from a
+strategy with `ml.predict()`. The model runs inside the job container on every bar, the same way
+in a backtest and in a live bot, so what you validate is exactly what you trade.
+
+PineconeX does not train models for you and does not host a training environment. It runs the
+finished model. The format is **ONNX**, the open standard that PyTorch, TensorFlow/Keras and
+scikit-learn can all export to.
+
+> **A model is not an edge.** Bolting a neural network onto six popular indicators does not create
+> alpha — those features have been mined by everyone for decades, and a model fit to them usually
+> learns nothing that survives out-of-sample. Treat ML as one more thing to **validate**, not as a
+> shortcut past validation. The most reliable use is *meta-labelling*: let a model filter the trades
+> of a strategy that already passed [Significance](#significance--is-the-edge-real-or-luck), rather
+> than asking it to find trades from scratch.
+
+### Uploading a model
+
+Go to the **Models** page, choose an `.onnx` file and give it a name. Names may contain letters,
+digits, `.`, `_` and `-`. Re-uploading the same name creates a **new version** (`v2`, `v3`, …); the
+old versions stay available so a strategy pinned to one keeps working.
+
+- Maximum size is **20 MB**. Real trading models — boosted-tree-sized or a small neural net — are a
+  few KB to a few MB; only very deep forests or sequence models approach the cap.
+- On upload the file is checked to be a valid ONNX graph, and its input width (number of features)
+  is read from it. A file that is not ONNX, or is too large, is rejected with a message.
+- How many models you may store depends on your plan (see [Plans](#plans)). Delete an old model or
+  version to free a slot.
+
+### Calling a model from Pine
+
+Declare the model at the top of the strategy with a `//@model=` line, then call it. The model
+receives an **array of features** and returns a number:
+
+```pine
+//@version=6
+//@model=my-model            // latest version — or my-model:3 to pin one
+
+strategy("ML example")
+
+f1 = ta.rsi(close, 14) / 100
+f2 = (close - ta.sma(close, 50)) / ta.stdev(close, 50)
+f3 = ta.atr(14) / close
+
+score = ml.predict("my-model", array.from(f1, f2, f3))
+
+if not na(score) and score > 0.6 and strategy.position_size == 0
+    strategy.entry("L", strategy.long)
+if not na(score) and score < 0.4
+    strategy.close("L")
+```
+
+- `ml.predict(name, features)` returns the first output of the model as a single number (a
+  regressor's prediction, or a probability). `ml.predict_all(name, features)` returns the **whole
+  output vector** as an array — use it for multi-class or multi-horizon models.
+- **`na` in, `na` out.** If any feature is `na` — which it will be during the warm-up bars while
+  `ta.*` fills its history — the model is not run and the result is `na`. Guard every use with
+  `not na(...)` as above, so a warm-up bar can never place an order.
+- The number of features you pass **must** match what the model was trained on, or the strategy
+  stops with a clear error. That is deliberate — a size mismatch is a silent-disaster bug in every
+  other ML setup.
+- A `//@model=` for a model you have not uploaded is caught when you validate the strategy, before
+  any job runs.
+
+### Three ways to use a model
+
+The array you pass and the number you get back are just data — how you *use* the number is the
+strategy design. The three common shapes:
+
+- **Direction** — the model predicts up/down and you trade its call. The hardest to make work; this
+  is asking the model to *be* the edge.
+- **Filter (meta-labelling)** — you already have entry rules; the model scores each candidate setup
+  and you only take the ones it rates highly. This keeps the edge you have and drops the trades most
+  likely to fail. The most productive of the three.
+- **Trigger / sizing** — the model's output shifts a threshold or the position size rather than
+  making the yes/no call itself.
+
+### Getting the features right — the one thing that breaks silently
+
+A model is only as good as the promise that **the features at training time are identical to the
+features at prediction time**. `ta.rsi` re-implemented in pandas is *not* the same series as
+`ta.rsi` in the interpreter — the warm-up, the smoothing and the rounding all differ — and a model
+trained on the wrong numbers will look fine and trade badly.
+
+The safe way is to let PineconeX produce your training data, so it comes from the same engine that
+will run the model:
+
+1. Write a throwaway strategy that computes your features and prints them once per bar with
+   [`log.info()`](#debugging-with-loginfo):
+
+   ```pine
+   //@version=6
+   strategy("feature dump")
+   f1 = ta.rsi(close, 14) / 100
+   f2 = (close - ta.sma(close, 50)) / ta.stdev(close, 50)
+   f3 = ta.atr(14) / close
+   log.info(str.tostring(f1) + "," + str.tostring(f2) + "," + str.tostring(f3) + "," + str.tostring(close))
+   ```
+2. Run it as a normal [backtest](#backtest) over the history you want, then download the job log —
+   each line is one bar's features.
+3. Train offline on that file, build your labels there (labels look into the future, so they must
+   never be computed on-platform), and export the model to ONNX.
+4. Upload, and use the **exact same feature expressions** in the real strategy.
+
+### What ONNX exports work
+
+Inference uses a self-contained CPU engine, which supports the **core ONNX maths operators**
+(matrix multiply, add, the common activations) — everything a linear model or a neural network
+needs. It does **not** support the specialised `ai.onnx.ml` operators, and this catches people out:
+
+- **scikit-learn decision trees, random forests and gradient boosting** export to a
+  `TreeEnsemble` operator that is **not** supported and will be rejected at run time.
+- A scikit-learn **`Pipeline` with a `StandardScaler`** exports a `Scaler` operator that is also not
+  supported.
+
+Export models built from core maths instead: linear / logistic regression, an **MLP**
+(`sklearn.neural_network`, or PyTorch/Keras), or trees converted to a plain tensor graph (e.g. with
+[Hummingbird](https://github.com/microsoft/hummingbird)). If you need feature standardisation, fold
+the mean/scale into the graph as ordinary subtract/divide steps rather than a `StandardScaler`
+pipeline stage, and export the classifier **without** the ZipMap step
+(`options={"zipmap": False}` in `skl2onnx`) so it returns a plain array.
+
+> **Determinism.** The same model file and the same bars always produce the same prediction, in a
+> backtest and in a live bot alike. There is no GPU and no randomness at prediction time — that is a
+> feature, not a limitation, because it is what makes a backtest trustworthy.
+
+### The discipline
+
+The model changes nothing about how you decide whether a strategy is worth trading:
+
+1. **Backtest** it, out-of-sample — train on an earlier slice, test on a later slice the model has
+   never seen.
+2. Run **[Significance](#significance--is-the-edge-real-or-luck)** on the held-out slice. A model
+   adds parameters and parameters overfit, so this matters *more* with ML, not less. If the filtered
+   strategy cannot beat scrambled prices, the model found a pattern in noise.
+3. Only then consider it for **[live](#live-trading)** — and paper-trade it first, like any strategy.
+
+A live bot always runs the platform's promoted engine version, so a model reaches live trading the
+same way any engine feature does.
 
 ---
 
