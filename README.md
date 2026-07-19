@@ -586,20 +586,11 @@ Each field is an ordinary `series float` you read like `close`:
 | `gex.call_wall` / `gex.put_wall` | the strongest resistance (above) and support (below) strikes; `…v` variants give their magnitude |
 | `gex.g1…g5` / `gex.g1v…g5v` | the five heaviest gamma strikes (price + signed magnitude: `+` call, `−` put) |
 
-```pine
-//@version=6
-//@runtime=2026.08.06-gex
-strategy("GEX regime filter", overlay=true)
-
-pinning = gex.net > 0                        // dealers long gamma → range / pin
-if pinning and not na(gex.put_wall) and close < gex.flip
-    strategy.entry("L", strategy.long, stop = gex.put_wall * 0.995, limit = gex.flip)
-```
-
-The rules-based loop most GEX strategies follow: **tag the regime** (`gex.net` sign + spot vs
-`gex.flip`), **map the levels** (flip, walls, pin), **fade toward the pin/walls in positive gamma /
-chase breakouts in negative**, and stand down near the flip (lowest-conviction zone). GEX is a
-leading indicator of the *volatility regime* — combine it with price action, not a signal on its own.
+You read these levels in Pine like any `series float` (pin `//@runtime=2026.08.06-gex` or newer). The
+usual approach: tag the regime from `gex.net`'s sign and spot vs `gex.flip`, then use the walls and
+`gex.pin` as levels — fade toward them in positive gamma, chase breakouts in negative. GEX is a
+leading indicator of the *volatility regime*, best combined with price action rather than used as a
+signal on its own.
 
 ### Availability — read this before you build on it
 
