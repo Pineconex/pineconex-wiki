@@ -18,6 +18,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Parameter Sweep](#parameter-sweep)
 - [Validation](#validation)
 - [Machine Learning Models](#machine-learning-models)
+- [Gamma Exposure (GEX)](#gamma-exposure-gex)
 - [Live Trading](#live-trading)
   - [Crypto](#crypto)
 - [Market Data](#market-data)
@@ -562,6 +563,58 @@ The model changes nothing about how you decide whether a strategy is worth tradi
 
 A live bot always runs the platform's promoted engine version, so a model reaches live trading the
 same way any engine feature does.
+
+---
+
+## Gamma Exposure (GEX)
+
+**Gamma Exposure (GEX)** measures where options market-makers ("dealers") have to hedge, which tells
+you where their hedging **pins** the underlying (suppresses moves) or **accelerates** it. PineconeX
+computes GEX from the live options chain (open interest × gamma across every strike) and exposes it
+to your strategy as a `gex.*` namespace — the same way `ml.*` exposes a model. There is no
+TradingView equivalent.
+
+### The levels
+
+Each field is an ordinary `series float` you read like `close`:
+
+| Field | Meaning |
+|---|---|
+| `gex.net` | net dealer gamma. **Sign is the regime**: `> 0` = pinning / mean-reverting; `< 0` = trending / accelerating |
+| `gex.flip` | the zero-gamma price — the pivot between those two regimes |
+| `gex.pin` | the max-gamma strike — the price **magnet** that price gravitates to in a positive-gamma regime |
+| `gex.call_wall` / `gex.put_wall` | the strongest resistance (above) and support (below) strikes; `…v` variants give their magnitude |
+| `gex.g1…g5` / `gex.g1v…g5v` | the five heaviest gamma strikes (price + signed magnitude: `+` call, `−` put) |
+
+```pine
+//@version=6
+//@runtime=2026.08.06-gex
+strategy("GEX regime filter", overlay=true)
+
+pinning = gex.net > 0                        // dealers long gamma → range / pin
+if pinning and not na(gex.put_wall) and close < gex.flip
+    strategy.entry("L", strategy.long, stop = gex.put_wall * 0.995, limit = gex.flip)
+```
+
+The rules-based loop most GEX strategies follow: **tag the regime** (`gex.net` sign + spot vs
+`gex.flip`), **map the levels** (flip, walls, pin), **fade toward the pin/walls in positive gamma /
+chase breakouts in negative**, and stand down near the flip (lowest-conviction zone). GEX is a
+leading indicator of the *volatility regime* — combine it with price action, not a signal on its own.
+
+### Availability — read this before you build on it
+
+GEX needs live options data, and that shapes where it works:
+
+- **Live trading on Saxo** works today: the bot fetches the Saxo options chain (European / Eurex
+  underlyings) each bar and injects real dealer gamma. Pin `//@runtime=2026.08.06-gex` or newer.
+- **Backtesting a GEX strategy currently trades nothing.** Historical options chains aren't retained,
+  so `gex.*` reads `na` on past bars and the strategy safely no-ops. GEX strategies are **validated
+  and paper-traded live**, not backtested, until a historical options data source is added.
+- When `gex.*` is `na` (no data / warmup / unsupported symbol), non-finite levels are filtered out of
+  order prices, so the strategy simply does nothing rather than trading on a bad level.
+
+GEX is **data you wire into your own strategy** — PineconeX never pushes gamma levels to you as
+buy/sell recommendations.
 
 ---
 
