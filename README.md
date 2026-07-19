@@ -754,6 +754,7 @@ Two things about Bitstamp that do not apply to a stock broker, and that will oth
 | Webhook signals | — | Yes | Yes |
 | Multi-timeframe support | — | — | Yes |
 | On-premise hosted infrastructure | — | Yes | Yes |
+| Premium US market data (Massive: 5-yr history, corporate actions) | — | Yes | Yes |
 
 GitHub-imported strategies do not count against the strategy quota on any plan.
 
