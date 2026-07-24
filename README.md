@@ -21,7 +21,11 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Gamma Exposure (GEX)](#gamma-exposure-gex)
 - [Live Trading](#live-trading)
   - [Crypto](#crypto)
+- [Tick data vs. bar data](#tick-data-vs-bar-data)
+  - [Enabling it](#enabling-it)
+  - [The tape.* namespace](#the-tape-namespace)
 - [Market Data](#market-data)
+  - [What a bar contains (OHLCV)](#what-a-bar-contains-ohlcv)
   - [Supported sources](#supported-sources)
 - [Brokers](#brokers)
 - [Plans](#plans)
@@ -671,11 +675,223 @@ Other crypto specifics worth knowing:
 
 ---
 
+## Tick data vs. bar data
+
+Everything else in PineconeX works on **bars**. A bar is the smallest unit of time the engine knows
+about: your strategy runs once, at the close of each completed bar, and sees the five OHLCV numbers
+that summarise it (see [What a bar contains](#what-a-bar-contains-ohlcv)). Everything that happened
+*inside* that bar — the individual trades, the bid/ask spread, whether the high came before the low
+— is gone by the time your script runs.
+
+**Tick data is the layer underneath.** A tick is a single event on the wire: one trade printed, or
+one change at the top of the order book. On a liquid US stock that is roughly 45 events per second,
+peaking above 240 — thousands of ticks compressed into the four prices of a single 5-minute bar.
+
+PineconeX can run a strategy on that layer instead, in a **live bot only**, through two pieces that
+work together:
+
+| | What it does |
+|---|---|
+| `calc_on_every_tick=true` | Re-runs your whole script on every real-time tick, against the still-forming bar, instead of once at bar close. |
+| `tape.*` | A namespace giving the script **read access to the tick itself** — last trade price and the top-of-book quote. |
+
+> **This goes beyond TradingView, and is not portable.** TradingView's `calc_on_every_tick` re-runs
+> a script per tick but exposes no tick-level data — the script still only sees the forming bar's
+> OHLC. `tape.*` is a PineconeX-exclusive namespace, like [`ml.*`](#machine-learning-models) and
+> [`gex.*`](#gamma-exposure-gex). A script using it will not run on TradingView.
+
+> **Preview feature.** The tick engine ships only on runtimes that include it — pin one with a
+> `//@runtime=` line at the top of the strategy, as [GEX](#gamma-exposure-gex) does, or ask support
+> which default runtime carries it. Today
+> the tick path is **observation-first**: `tape.*` and the signals it produces are evaluated and
+> logged on every tick, while order placement stays on the bar-close path unless intrabar ordering
+> is enabled for your bot (see [What actually gets ordered](#what-actually-gets-ordered)).
+
+### Enabling it
+
+There is nothing to switch on in the interface. It is declared in the strategy itself, as an
+argument to `strategy()`:
+
+```pine
+//@version=6
+strategy("order flow", overlay=true, calc_on_every_tick=true)
+```
+
+That is the whole switch. When a bot launches, it checks each strategy in its basket for the flag,
+and attaches a real-time feed only if at least one asks for it. A strategy without the flag behaves
+exactly as before — one evaluation per completed bar.
+
+**Backtests, sweeps and validation ignore it completely.** There is no tick history to replay: the
+catalog stores bars, not ticks. In a backtest, a sweep, a significance or stress run — and in the
+inline validator — every `tape.*` field reads `na`, so a tick strategy shows *no trades at all*.
+This is deliberate and safe (a missing tick can never produce a garbage price level), but it means
+**a `tape.*` strategy cannot be backtested**. You cannot validate its edge the normal way; treat
+anything you build here as unproven until you have watched it on a paper account.
+
+### Which feeds carry ticks
+
+Tick data comes from a broker's streaming socket, not from the data catalog, so it depends entirely
+on the data source your bot is running:
+
+| Source | Tick feed | Notes |
+|---|---|---|
+| **Alpaca** (US equities) | Yes — real-time | The free **IEX** tape by default (a few percent of consolidated volume). The paid consolidated **SIP** tape is an operator setting. |
+| **Alpaca** (crypto) | Yes — real-time | 24/7, so a tick strategy can be observed outside market hours. |
+| **Bitstamp** (crypto) | Yes — real-time | Public feed, no API key needed: live trades **and** the top of the order book, 24/7. |
+| **Saxo Bank** | Yes, but **delayed** | Quote-only and typically ~20 minutes behind without a real-time market-data subscription. **Observe-only** — see below. |
+| **Yahoo**, **Massive**, **Interactive Brokers** | No | No tick path. `calc_on_every_tick` is accepted and simply never fires. |
+
+If a strategy asks for ticks on a source that has none, the bot says so in its log and carries on
+at bar close — it does not fail to start.
+
+### The `tape.*` namespace
+
+Every field is a `series float`, and every one is `na` until a tick supplies it:
+
+| Field | Meaning |
+|---|---|
+| `tape.price` | Price of the last trade on this tick. |
+| `tape.bid` / `tape.ask` | Top-of-book quote — the best bid and best offer. |
+| `tape.bid_size` / `tape.ask_size` | Size resting at the top of the book (order-book imbalance). |
+
+`na` is the safe default everywhere: in a backtest, before the first tick arrives, during warmup,
+and on a partial tick. Many feeds send trades and quotes as *separate* events, so a trade-only tick
+leaves `tape.bid`/`tape.ask` at `na` and a quote-only tick leaves `tape.price` at `na`. **Guard
+every read** — `not na(tape.price)` — exactly as the smoke strategy below does. Non-finite values
+are filtered out of orders and stops downstream, so an unguarded strategy does nothing rather than
+firing at a nonsense price, but the guard is what makes the logic explicit.
+
+**There is no tick lookback.** `tape.price[1]` reads `na` — the engine keeps no per-tick history, so
+each re-run sees only the current tick plus the committed bar history. Anything comparing this tick
+to the last one has to derive it from bar state.
+
+> **Saxo's tape is not a trade tape.** A Saxo price subscription streams Bid/Ask/Mid — there are no
+> trade prints — so `tape.price` is the **mid**, which by construction always sits *inside* the
+> book. Any signal of the form "the trade lifted the offer" (`price >= ask`) is unsatisfiable on
+> Saxo. The streamed quote also omits size, so `tape.bid_size` / `tape.ask_size` are unusable there.
+> Combined with the delay, Saxo's tick path is for **observation only** — never let a stale quote
+> drive an order.
+
+### How often your script actually re-runs
+
+Not on every tick. A liquid symbol can push hundreds of events per second, and re-running a whole
+strategy that often would simply fall behind. Instead the bot **coalesces**: every arriving tick is
+merged into a per-symbol accumulator (cheap — it just overwrites the latest trade and quote), and
+the script re-runs once on the freshest merged state, no more often than that symbol's own cadence.
+
+That cadence is **derived from your strategy**, not configured. At warmup the bot times 200 real
+re-runs of your script and spaces re-runs at 4× the measured cost, clamped between **5 ms and 1 s**.
+A cheap strategy therefore re-runs at close to tick speed; a deep-history one spreads out. The bot
+prints the measured figure when it starts:
+
+```
+[AAPL] intrabar re-run ≈310µs → coalesce ≥5ms between re-runs (≤200/s), 4× margin
+```
+
+Two consequences worth internalising:
+
+- **`tape.*` is the *latest* tick, not every tick.** Trades that arrived between two re-runs were
+  merged, not queued. You cannot count prints, sum tick volume, or reconstruct a trade sequence from
+  it — it is a live snapshot of the tape, not a recording of it.
+- **A heavier strategy sees a coarser tape.** If you need reaction speed, keep the tick path's logic
+  short and let the expensive indicators run at bar close.
+
+### Writing tick logic: the one rule that surprises people
+
+Each intrabar re-run happens on a **throwaway clone** of your script's state. The committed state
+only ever advances at a real bar close. That is what makes it safe to re-run the same forming bar
+hundreds of times — but it also means:
+
+> **Anything written to a `var` during a tick re-run is discarded.** A `var` counter incremented on
+> every tick will appear to advance only once per bar, because only the bar-close run is kept.
+
+So tick logic must be **stateless**: derivable from the current `tape.*` values plus committed bar
+state. If you need memory across ticks, it belongs in the bar-close path.
+
+Deduplication works the normal Pine way. A signal that is true intrabar will still be true on the
+next re-run a few milliseconds later, so guard entries with the position itself:
+
+```pine
+if liftOffer and strategy.position_size == 0
+    strategy.entry("L", strategy.long)
+```
+
+When a fill happens, the bot reflects it back into the committed state immediately, so the very next
+re-run sees the position and the entry cannot fire twice.
+
+### What actually gets ordered
+
+The tick path is being rolled out in stages, and the current default is conservative:
+
+- **Observation (default).** The script re-runs per tick, `tape.*` is live, and the orders the
+  strategy *would* emit are counted and logged — but the orders themselves are still placed on the
+  bar-close path. This lets you watch a tick strategy against a real feed with no order risk.
+- **Early market entries (opt-in, per deployment).** The point of `calc_on_every_tick` is latency:
+  submitting a market entry the instant the signal turns true, rather than waiting up to a full bar
+  for the close. Only bare `strategy.entry` market orders take this path.
+- **Still on bar close, always.** `limit=` / `stop=` entries, `strategy.exit` OCO pairs, and stop
+  trailing. A resting order cannot be deduplicated by position size, so those stay where they are
+  verified.
+
+Exits and stops therefore behave exactly as documented under
+[How orders are executed](#how-orders-are-executed) — enabling ticks changes *when a signal is
+noticed*, not how the broker protects your position.
+
+### A complete example
+
+This is the smoke strategy used to exercise the path. It trades only when a real feed is attached,
+and does nothing at all in a backtest:
+
+```pine
+//@version=6
+// tape.* is PineconeX-exclusive — this script does not run on TradingView.
+strategy("tape smoke", overlay=true, calc_on_every_tick=true)
+
+px     = tape.price
+bid    = tape.bid
+ask    = tape.ask
+spread = ask - bid
+
+// Go long when a trade lifts the offer (buyer aggression) on a tight book;
+// flatten when a trade hits the bid.
+tight     = not na(spread) and spread <= 0.05
+liftOffer = not na(px) and not na(ask) and px >= ask
+hitBid    = not na(px) and not na(bid) and px <= bid
+
+if tight and liftOffer and strategy.position_size == 0
+    strategy.entry("L", strategy.long, alert_message="tape LIFT @ {{close}}")
+
+if hitBid and strategy.position_size > 0
+    strategy.close("L", alert_message="tape HIT-BID @ {{close}}")
+```
+
+Note the shape of it: every read guarded with `na(...)`, no `var` state, and the position used as
+the dedup lock. That is the template.
+
+---
+
 ## Market Data
 
 The **Data** page shows the market data catalog: every symbol and timeframe combination that has been fetched and is available for backtesting.
 
 Each entry shows the data source, timeframe, date range, and row count. Use the **Fetch** button to trigger a data update for a symbol/timeframe that is missing or stale.
+
+### What a bar contains (OHLCV)
+
+Every dataset is stored as **OHLCV bars** — one row per bar of the chosen timeframe — and those five columns are exactly what your strategy sees. In Pine they are the built-in series `open`, `high`, `low`, `close` and `volume`: the first traded price of the bar, the highest and lowest price reached during it, the last price before it closed, and the total quantity traded. There are no tick or quote-level fields — a bar is the smallest unit of time the engine knows about, so anything that happened *inside* it (the order in which the high and the low were hit, the spread, individual trades) is not recoverable. That is why a backtest fills at bar prices while a live bot fills at whatever the broker gets, and why the two can diverge on the same signal. (A **live bot** can reach the tick layer through [`calc_on_every_tick` and `tape.*`](#tick-data-vs-bar-data) — but that is a real-time stream, not stored data, so it is unavailable to a backtest.)
+
+Pine also derives four **average-price series** from those fields, and you can use them anywhere a price is expected — as a smoother, less noisy input to an indicator, for example:
+
+| Series | Formula | Typical use |
+|--------|---------|-------------|
+| `hl2` | `(high + low) / 2` | The bar's median price — the classic "typical price" for pivots and channels. |
+| `hlc3` | `(high + low + close) / 3` | Median weighted toward the close; the standard input for VWAP-style and volume-profile work. |
+| `ohlc4` | `(open + high + low + close) / 4` | The bar's full average — the smoothest of the four. |
+| `hlcc4` | `(high + low + close + close) / 4` | Like `hlc3` but double-weighting the close. |
+
+You are not limited to those: any arithmetic on the raw fields is a valid series, so `(high + low + open) / 3` or `close - open` work just as well. Writing `ta.sma(ohlc4, 20)` instead of `ta.sma(close, 20)` gives a moving average that reacts to the whole bar rather than to one instant of it — often a meaningful difference on higher timeframes, where a single closing print carries a lot of noise.
+
+> **Volume is not universal.** Equity and crypto sources carry real traded volume, but **FX bars do not** — Saxo returns bid/ask quotes for FX with no trade field, so volume arrives as `0`. A strategy that filters on volume will therefore never trigger on an FX symbol. Check the series before you depend on it. When a daily dataset is resampled to weekly or monthly, volume is **summed** across the period while OHLC is taken as first/max/min/last, which is the correct aggregation.
 
 ### Supported sources
 
