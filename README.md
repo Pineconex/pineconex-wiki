@@ -1,6 +1,6 @@
 # PineconeX Documentation
 
-> **Version:** v0.1.4-alpha
+> **Version:** v0.1.6-alpha
 
 PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6** strategies against real market data. Write your strategy once — backtest it, sweep its parameters, validate that the edge is real, then deploy it live against a connected broker, all from the same interface.
 
@@ -13,6 +13,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Getting started](#getting-started)
 - [Strategies](#strategies)
   - [Learning Pine Script v6](#learning-pine-script-v6)
+  - [Same-bar stop and target (the bar magnifier)](#same-bar-stop-and-target-the-bar-magnifier)
 - [Backtest](#backtest)
 - [Debugging with log.info()](#debugging-with-loginfo)
 - [Parameter Sweep](#parameter-sweep)
@@ -20,6 +21,9 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Machine Learning Models](#machine-learning-models)
 - [Gamma Exposure (GEX)](#gamma-exposure-gex)
 - [Live Trading](#live-trading)
+  - [Execution routing](#execution-routing)
+  - [Options routing (Alpaca)](#options-routing-alpaca)
+  - [Multi-symbol baskets](#multi-symbol-baskets)
   - [Crypto](#crypto)
 - [Tick data vs. bar data](#tick-data-vs-bar-data)
   - [Enabling it](#enabling-it)
@@ -53,6 +57,8 @@ PineconeX runs standard **Pine Script v6**, so the official TradingView document
 - **[Pine Script v6 User Manual](https://www.tradingview.com/pine-script-docs/)** — the language guide: syntax, types, execution model, and how-to tutorials.
 - **[Pine Script v6 Reference Manual](https://www.tradingview.com/pine-script-reference/v6/)** — the full API reference for every built-in function, variable, and keyword (`ta.*`, `strategy.*`, `str.*`, …).
 - **[TradingView Community Scripts](https://www.tradingview.com/scripts/)** — thousands of published open-source strategies and indicators to learn from and adapt.
+
+For the trading side rather than the language, the **[Learn hub](https://pineconex.com/learn)** collects the books, talks and guides we recommend on systematic trading, backtesting and validation.
 
 > **PineconeX runs Pine headless** — there is no chart, so chart/UI calls (`plot`, `hline`, drawings, tables, …) are accepted but silently ignored, and a few primitives diverge from TradingView (e.g. `alertcondition()` is repurposed for notifications, indexing an indicator call directly returns `na`). The language is the same; the runtime is backtest/live execution rather than a chart. These differences are called out throughout this guide where they matter.
 
@@ -132,6 +138,21 @@ The engine simulates the standard Pine Script v6 `strategy()` cost and fill-assu
 
 All default to no cost (`0`), so a strategy without these arguments backtests frictionlessly. See the inline comments in the default strategy template for exact syntax.
 
+### Same-bar stop and target (the bar magnifier)
+
+When one bar's range touches **both** a resting stop and a resting take-profit, the bar's four prices cannot say which one price reached first. The engine's default is to book the **take-profit** — optimistic, and it flatters every bracket strategy.
+
+`strategy(use_bar_magnifier = true)` resolves those ties from finer data instead:
+
+| Where | How a tie is resolved |
+|-------|-----------------------|
+| **Backtest** and **Sweep** | The engine walks the **Intrabar (LTF)** sub-bars inside the ambiguous bar and books whichever leg price actually reached first. A single sub-bar that touches both legs is itself ambiguous, so the **stop** wins there. If no sub-bar covers the bar, it falls back to the optimistic default rather than inventing a worse result from missing data. |
+| **Significance** and **Stress** | The permutation null rebuilds every bar, so real sub-bars cannot apply. The tie is resolved from the recomposed bar's own OHLC with a driftless Brownian bridge — `P(low before high) = (high − open) / (high − low)` — booking the more likely leg first, with an exact 50/50 breaking to the stop. Deterministic on purpose: the only randomness stays the seeded shuffle, so the p-value remains reproducible. |
+
+- **In a backtest or sweep the flag needs an intrabar series.** Without one it is a silent no-op (a warning appears in the log) — pick an **Intrabar TF** on the form, or set `ltf` in your [JSON5 params](#parameter-overrides-json5). Validation needs no series; it resolves ties from the bar itself.
+- **It is opt-in and inert by default.** A strategy without the flag produces byte-identical results to before.
+- **Expect the numbers to get worse when you switch it on** — that is the point. On real 15-minute sub-bars under a 1-hour chart, a bracket strategy moved from a 62% win rate and 1.70 profit factor to 55% and 1.28. Nothing was lost; the optimistic bias was removed.
+
 ### Position sizing
 
 By default a strategy trades **one share/contract per order**. Control the order size with the standard Pine Script v6 `strategy()` arguments `default_qty_type` and `default_qty_value`:
@@ -150,6 +171,16 @@ strategy("My strategy", default_qty_type = strategy.percent_of_equity, default_q
 
 - **Whole shares only.** Equity orders are rounded **down** to whole shares; if the computed size is below one share the order is skipped. (Crypto keeps fractional size.) Because of the round-down, a `cash` or `percent_of_equity` order usually deploys slightly *less* than the nominal amount — e.g. $5,000 of a $294 stock buys 16 shares (≈ $4,714), not a fractional 16.9.
 - **`percent_of_equity` uses your real broker equity.** A live bot reads your connected account's current equity to size the order and refreshes it as the account value changes. Backtest, sweep, and validation runs use the strategy's `initial_capital` instead.
+
+#### Margin and leverage (`margin_long` / `margin_short`)
+
+Both default to **100** — full cash cover, no leverage — exactly as Pine Script v6 does, and an entry that would need more money than the account has is **not opened**. So `default_qty_type = strategy.percent_of_equity, default_qty_value = 400` no longer quietly borrows four times your equity; it is capped at what you can actually pay for.
+
+If you *want* leverage, say so: `strategy(..., margin_long = 25)` is 4× (25% of the position value must be covered). An explicit `margin_long = 0` also maps to 100 rather than to "unlimited" — reading a 0% requirement literally would mean infinite leverage, which is the most dangerous possible interpretation.
+
+> **This changes historical backtest numbers.** A strategy that was implicitly over-leveraging now reports lower, realistic results, because the entries it could not afford are no longer taken. TradingView would not have taken them either — this is what makes a PineconeX backtest and a TradingView backtest of the same script agree.
+
+> **Our margin limit is not your broker's.** It never goes over the wire — an order carries only a quantity, and your broker applies its own Reg T / maintenance rules independently. The two never talk, which is exactly why ours must not be looser than theirs. On a live bot, see [Margin monitoring](#margin-monitoring).
 
 ### Pyramiding
 
@@ -181,7 +212,7 @@ Run a single backtest of a strategy against a historical dataset.
 | **Symbol / Index** | Pick the market index, then the individual symbol. |
 | **Timeframe** | Bar resolution for the primary series (`1M`, `1W`, `1D`, `90m`, `60m`, `30m`, `15m`, `5m`, `1m`). See [Timeframe syntax](#timeframe-syntax). |
 | **Higher timeframe** | Optional — the `request.security` series. Pre-fillable from the `htf` key in your [JSON5 params](#parameter-overrides-json5). |
-| **Intrabar TF** | Optional — the `request.security_lower_tf` (intrabar) series. Pre-fillable from the `ltf` key in your [JSON5 params](#parameter-overrides-json5). |
+| **Intrabar TF** | Optional — the `request.security_lower_tf` (intrabar) series. Pre-fillable from the `ltf` key in your [JSON5 params](#parameter-overrides-json5). Also the series [`use_bar_magnifier`](#same-bar-stop-and-target-the-bar-magnifier) resolves same-bar stop/target ties from — without it, the flag does nothing. |
 | **Date range** | Start and end date for the historical window. |
 | **Data source** | Which feed the bars come from — Yahoo, Saxo, Alpaca, Bitstamp, Massive or IBKR. Only the sources that actually carry the selected symbol are offered. See [Supported sources](#supported-sources). |
 
@@ -622,10 +653,11 @@ Deploy a strategy as a live bot that connects to a broker and executes orders in
 ### Launching a bot
 
 1. Go to **Live** and connect a broker (see [Brokers](#brokers)).
-2. Select a strategy and symbol.
+2. Select a strategy and symbol — or tick **Basket** to trade several symbols with one bot (see [Multi-symbol baskets](#multi-symbol-baskets)).
 3. Choose the timeframe (`5m`, `15m`, `30m`, `60m`, `90m`, `1D` — see [Timeframe syntax](#timeframe-syntax)).
 4. Enable **Auto-restart** if you want the bot to restart automatically after a crash.
-5. Click **Launch**.
+5. Check the **Execution routing** card below the form — it decides where the orders actually go (see [Execution routing](#execution-routing)).
+6. Click **Launch**.
 
 ### Monitoring
 
@@ -650,7 +682,53 @@ It is important to understand how a live bot turns a strategy signal into a brok
 
 > Live results can still differ from a backtest on identical signals: a backtest fills at modelled prices at the bar close, while a live order fills at whatever the market gives you — and a live resting stop can be hit *inside* a bar, where a backtest would only have seen the bar's close. The divergence is by design: live is native, backtest is simulated.
 
-> **Stopping a live bot does not close its position or cancel its resting orders.** The bot is shut down; whatever it holds, and any stop/take-profit orders it left at the broker, remain there unmanaged. Close them yourself in your broker's interface.
+> **Stopping a live bot cancels its resting orders — it does not close the position.** On shutdown the bot cancels the entry and exit orders it left at the broker (a resting order with no bot behind it is a hazard: a stop-loss is a sell, and a sell with nothing behind it can *open a short*). What it holds is yours, so it is left alone and named in the log as unprotected. **Close the position yourself in your broker's interface** if you do not intend to relaunch — a relaunched bot re-adopts the position and re-protects it. (On Bitstamp nothing rests at the exchange in the first place — see [Crypto](#crypto).)
+
+### Execution routing
+
+The **Execution routing** card on the launch form decides where a signal ends up. There are three routes, and they combine:
+
+| Route | What it does |
+|-------|--------------|
+| **Execute orders on the broker** | The default. PineconeX places the order on your connected broker account. Unchecking it makes the bot **signal-only**: it evaluates the strategy, fires the webhook, and sends nothing to your broker. |
+| **Webhook URL** | Order events are POSTed to your own `http(s)` endpoint — the strategy's `alert_message` when it has one, a structured event otherwise. Mainly to hand execution to a third-party platform, but usable for plain notifications. Delivery only ever goes to the address you enter. |
+| **Options routing** | Alpaca only. Each signal is scored across the shares and the option chain, and the better expression is placed. See below. |
+
+> If a third-party platform executes off your webhook, **it owns the real position**. PineconeX then only tracks its own simulated one, which can drift from your actual account.
+
+### Options routing (Alpaca)
+
+Tick **Let the model choose shares, calls or puts per signal** and each signal is scored by a pricing model across the underlying shares and the option chain — a long can be expressed by buying shares or calls, a short by buying puts — and whichever gives the better risk-adjusted outcome is placed. A long option's premium is a hard maximum loss; a stop is not, because a gap can trade straight through it.
+
+> **It is a fit question, not a feature toggle.** Options routing suits fast, directional strategies — momentum, breakouts, catalysts. On a slow or mean-reverting strategy the option decays while it waits for an exit signal and can expire worthless, losing the premium where the shares would have sat roughly flat. If the edge is not a near-term move, use shares.
+
+Each bot carries its own settings; leave a field blank to use the runtime default shown as the placeholder:
+
+| Setting | Meaning |
+|---------|---------|
+| **Capital ($)** | Cash the model may deploy per signal. |
+| **Risk fraction (0–1)** | Fraction of that capital allowed to be lost on the stop — this is what sizes the position. |
+| **Horizon (days)** | How long you expect to hold. Drives which expiry wins the scoring. |
+| **Min DTE / Max DTE** | The expiry window the chain search considers, in days to expiry. Min DTE is floored at 1, so same-day (0DTE) contracts are unreachable from the product. |
+| **Auto-roll before expiry** | On by default. A held option is rolled to a later expiry before it decays to nothing — the chain is re-scored exactly as the entry was, the near leg is closed and the further one opened. Your strategy reasons in the underlying's price and is blind to expiry, so without this a sideways market with no exit signal can let a position expire out from under it. |
+| **Allow short** | Open a short expression when a sell signal arrives with nothing held. |
+| **Dry run** | Score and log the decision, place nothing. The safe way to watch the model on a live feed. |
+
+### Multi-symbol baskets
+
+**Pro plan and above.** Tick **Basket** on the launch form to have a *single* bot trade several symbols in one process, over one shared timeframe and one broker account, instead of launching one bot per symbol. It counts as one job against your concurrency limit.
+
+- **One combined heartbeat.** A basket sends a single Telegram overview — a per-symbol table (price, position, live P&L) plus a net summary — rather than one message per symbol.
+- **One position per symbol**, evaluated at the same bar close across the basket.
+- **Saxo, Alpaca and Bitstamp only.** Interactive Brokers and Lightspeed do not fit a shared connection, and a prop-firm futures basket would be a basket of contract months with its own roll for each — single symbol only there.
+
+> Launching one bot per symbol remains the more controllable option: each has its own log, its own position and its own stop button, so you can shut one symbol down without touching the rest.
+
+### Margin monitoring
+
+A live bot checks the account's margin usage every 5 minutes on every broker that can lend — Saxo, Alpaca and prop-firm futures — and reports it in the log, so a margin call is visible before it acts on you. Bitstamp spot cannot borrow at all, so no margin call is possible there.
+
+Margin is consumed by **borrowing**, not by holding: a cash-funded long uses none, and a bot on such an account simply logs *"no leverage in use"*. A blocked or restricted account is reported as such rather than as a healthy 0%. Note this is your broker's limit — the strategy's own cap is [`margin_long` / `margin_short`](#margin-and-leverage-margin_long--margin_short), and the two are enforced independently.
 
 ### Crypto
 
@@ -743,6 +821,12 @@ on the data source your bot is running:
 
 If a strategy asks for ticks on a source that has none, the bot says so in its log and carries on
 at bar close — it does not fail to start.
+
+> **Alpaca allows one market-data connection per account** — so only **one tick-streaming bot per
+> Alpaca account** can have the tape at a time. A second one is refused the stream (it backs off and
+> keeps retrying, because it is the *other* bot that would have to stop). It still trades normally:
+> orders and bar polling go over REST, so only `tape.*` is affected. Bots that do not set
+> `calc_on_every_tick` never take the connection.
 
 ### The `tape.*` namespace
 
@@ -953,6 +1037,18 @@ Two things about Bitstamp that do not apply to a stock broker, and that will oth
 - **A spot holding is a balance, not a position.** Bitstamp stores no average entry price anywhere, so a bot reconstructs its cost basis from your fill history. A coin that was **deposited** (or bought more than 30 days ago, outside the API's transaction window) has no purchase price the bot can find — so it **refuses to trade that holding** and says so in the log, rather than inventing an entry price and computing wrong P&L, stops and take-profits from it. **Fund a Bitstamp bot's account by buying the coin, not by depositing it.**
 - **Spot is long-only.** A short entry is refused — there is nothing to borrow.
 
+### Prop-firm futures (Tradovate)
+
+CME futures through a prop-firm account, over the Tradovate gateway. **New — treat it as a preview and run it on a demo account first.**
+
+1. Click **Configure** on the *Tradovate API* card and pick your firm.
+2. Enter your Tradovate login plus the **App ID**, **CID** and **Secret** your firm issued with the account. API market data must be enabled on the account, or no bars can be fetched.
+3. The credentials are verified against the gateway before they are stored. The card then shows **Demo** or **Funded**.
+
+> **Your firm's risk rules are invisible to the bot.** The daily loss limit, the trailing drawdown and the flat-by time are enforced on the firm's side: a breach flattens every position and locks the account mid-session, with none of the bot's own orders filling. The bot halts when it notices rather than re-entering, but it cannot prevent it. Futures are leveraged whenever a position is open — see [Margin monitoring](#margin-monitoring).
+
+> **The bot does not roll contracts.** It trades the front month resolved at launch, so stop and relaunch it before expiry. Baskets are single-symbol only on this broker for the same reason.
+
 ---
 
 ## Plans *
@@ -966,6 +1062,7 @@ Two things about Bitstamp that do not apply to a stock broker, and that will oth
 | Validation (significance + stress) | — | — | Yes |
 | Machine learning models | — | — | Yes |
 | Live trading | 1 job (limited lifetime) | Yes | Yes |
+| Multi-symbol basket (universe) jobs | — | Yes | Yes |
 | Telegram notifications | — | Yes | Yes |
 | Webhook signals | — | Yes | Yes |
 | Multi-timeframe support | — | — | Yes |
@@ -983,6 +1080,9 @@ Upgrade your plan under **Account → Plan**.
 ## Support
 
 - **Website:** [pineconex.com](https://pineconex.com)
+- **Learn:** [pineconex.com/learn](https://pineconex.com/learn) — books, talks and guides on systematic trading.
+- **Web API:** [pineconex.com/api-docs](https://pineconex.com/api-docs) — the REST reference for driving your account programmatically (strategies, backtests, sweeps, validation, live bots).
+- **AI skill:** [pineconex.com/skill](https://pineconex.com/skill) — the packaged skill that lets an AI assistant operate the same API on your behalf.
 - **Telegram:** link shown on the Support page inside the app.
 - **Email:** support@pineconex.com
 - **General inquiries:** info@pineconex.com
