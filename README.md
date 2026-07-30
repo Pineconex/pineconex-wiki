@@ -20,6 +20,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Validation](#validation)
 - [Machine Learning Models](#machine-learning-models)
 - [Gamma Exposure (GEX)](#gamma-exposure-gex)
+- [Regime-aware sizing (VMSC)](#regime-aware-sizing-vmsc)
 - [Live Trading](#live-trading)
   - [Execution routing](#execution-routing)
   - [Options routing (Alpaca)](#options-routing-alpaca)
@@ -171,6 +172,8 @@ strategy("My strategy", default_qty_type = strategy.percent_of_equity, default_q
 
 - **Whole shares only.** Equity orders are rounded **down** to whole shares; if the computed size is below one share the order is skipped. (Crypto keeps fractional size.) Because of the round-down, a `cash` or `percent_of_equity` order usually deploys slightly *less* than the nominal amount — e.g. $5,000 of a $294 stock buys 16 shares (≈ $4,714), not a fractional 16.9.
 - **`percent_of_equity` uses your real broker equity.** A live bot reads your connected account's current equity to size the order and refreshes it as the account value changes. Backtest, sweep, and validation runs use the strategy's `initial_capital` instead.
+
+> Sizing each order from the market's current volatility, instead of a fixed cash or equity fraction, is a separate feature: see [Regime-aware sizing (VMSC)](#regime-aware-sizing-vmsc).
 
 #### Margin and leverage (`margin_long` / `margin_short`)
 
@@ -641,6 +644,133 @@ GEX needs live options data, and that shapes where it works:
 
 GEX is **data you wire into your own strategy** — PineconeX never pushes gamma levels to you as
 buy/sell recommendations.
+
+---
+
+## Regime-aware sizing (VMSC)
+
+**VMSC** measures the *market regime* of a basket of symbols you name, and hands it to your strategy
+as a daily reading through a `vmsc.*` namespace. It answers two questions a single symbol's chart
+cannot:
+
+- **V**, how much the basket's members move **individually** (the cross-sectional mean of per-name
+  annualised realised volatility).
+- **MSC**, how much of that movement is the **same** movement (mean squared pairwise correlation over
+  the basket, `0` = independent, `1` = effectively one position).
+
+The distinction is the point. High V with low MSC is many independent opportunities; high MSC is one
+position wearing twelve tickers, quietly leveraged. Volatility is opportunity *and* risk, so you
+select for it and then size against it. Correlation is only ever risk, so it can only ever shrink a
+position. There is no TradingView equivalent, so a script using `vmsc.*` runs on PineconeX only.
+
+### Reading it in Pine
+
+```pine
+//@version=6
+//@runtime=2026.07.29-vmsc
+
+// The basket the regime is measured over. This exact statement is what names the universe.
+group = array.from(
+     "NASDAQ:NVDA", "NASDAQ:AMD", "NASDAQ:INTC", "NASDAQ:ON", "NASDAQ:NXPI", "NASDAQ:LSCC",
+     "NASDAQ:TSEM", "NASDAQ:AOSL", "NASDAQ:INDI", "NASDAQ:NVTS", "NYSE:STM", "NYSE:MX")
+
+[v, msc, score] = vmsc.calculate(group)
+```
+
+| Value | Meaning |
+|---|---|
+| `v` | cross-sectional mean of per-name annualised volatility (`0.35` = 35% a year) |
+| `msc` | mean squared pairwise correlation over the basket, bias-corrected, in `[0, 1]` |
+| `score` | `v / max(msc, 0.05)`. The floor keeps the ratio finite in a decorrelated market, which is where the estimate is weakest |
+
+All three are ordinary `series float`s: index them (`msc[1]`), window them with `ta.*`, plot them.
+
+**The argument to `vmsc.calculate()` is the universe.** PineconeX reads the array at the call site
+before the run, resolves each ticker, and precomputes the series, so the declaration has to be
+readable without executing the script:
+
+- assign it at **global scope, starting at the left margin** (not inside an `if`, a `for`, or a
+  function);
+- use a literal `array.from("EXCHANGE:TICKER", ...)` of quoted strings, not `array.push` and not a
+  computed list;
+- at least **3 symbols** (a mean squared *pairwise* correlation needs more than one pair);
+- every constituent needs **daily (1D) history** already fetched on the platform.
+
+Break any of those and the job is **rejected at launch with the reason**, rather than started with
+readings that are silently `na`. The engine re-checks the basket on the first bar and hard-errors if
+it does not match what was precomputed, so the script and the data can never drift apart.
+
+> **Guard the readings with `nz()`.** Where a reading is unavailable (warmup, the validator, a live
+> bot) it is `na`, and an `na` quantity does not cancel an order in Pine, it falls back to
+> `default_qty_value`. Sizing a position from an unguarded `na` trades the default size while looking
+> regime-aware. The reference template sets `default_qty_value = 0` as a tripwire for exactly this.
+
+### How the series behaves
+
+- **Daily, and lagged one day.** A reading stamped for date *D* is computed from returns through
+  *D*'s close, so it becomes visible on *D+1*. An intraday strategy reads the most recent daily
+  value, held flat through the session. No lookahead.
+- **The lookback is 60 trading days**, fixed and not configurable. Measurement showed the knob does
+  not earn its place (mean MSC over a semiconductor basket is 0.217 at 60 days and 0.216 at 120),
+  while a window under about 20 days turns the correlation estimate into a readout of the window
+  length rather than of the market.
+- **Membership is per-date.** A constituent contributes on the dates where it has a full window, so a
+  2021 listing does not erase everyone else's 2015 history.
+- **Corporate-action cliffs are dropped, not averaged.** A single unadjusted split in one member
+  would otherwise inflate V and distort that name's every correlation for a whole window.
+- **Computed once per basket, then cached and shared.** The first job naming a new basket pulls each
+  member's daily history and is slower to start; every later job reading the same basket is instant.
+  Changing the membership is automatically a different basket, never an edit to the old series.
+
+### Where it works
+
+| Job type | VMSC |
+|---|---|
+| Backtest, sweep, significance, stress | Full support |
+| **Live bots** | **Not delivered yet.** The readings are `na`, so an `nz()`-guarded strategy sizes neutrally and trades its base size |
+
+That live gap matters if you built the sizing rule and then deploy it: the bot will trade, and it
+will trade *flat-sized*. Until it is wired, treat VMSC as a backtest and research feature.
+
+### What it is actually good for
+
+The proven use is **volatility targeting**: divide the position by the symbol's own volatility so a
+calm month and a panicked month risk the same amount of money. Measured across three baskets (88
+names, 4,051 trades, one account per name, identical entry and exit signals in every run, so only the
+order size differed):
+
+| Basket | Names | Trades | Drawdown | Average size |
+|---|---|---|---|---|
+| US semiconductors | 12 | 257 | 19.6% → 10.6% (−46%) | 0.68× |
+| DAX | 36 | 1,777 | 21.2% → 18.4% (−13%) | 0.95× |
+| CAC 40 | 40 | 2,017 | 23.4% → 21.2% (−10%) | 1.00× |
+
+CAC 40 is the cleanest case, because there is nothing to trade off: the same average position size,
+the same return (2.10% vs 2.07%), and a tenth of the drawdown simply gone. Drawdown improved on 27 of
+those 40 names individually, which is well above chance.
+
+Three things to know before you copy it:
+
+1. **Judge it on drawdown, never on raw profit.** A rule that trades smaller can always be made to
+   look bad on net return, because trading smaller is *how it works*. On the semiconductor basket the
+   volatility-targeted run earned less in absolute terms and more per unit of risk; re-levered to the
+   control's drawdown it returns roughly 28% more at the same risk.
+2. **Keep the base size well under 1× the account.** At 1× the account is already fully invested, so
+   the multiplier can only ever shrink a position and never grow one, and the rule quietly stops
+   working while reporting perfectly normal numbers. The reference template uses 0.4×.
+3. **Size *down* into volatility, not up.** The opposite sign was tested and lost: it put more size on
+   the trades that turned out wildest. Volatility being the source of profit is an argument for
+   *choosing* volatile markets, not for buying more shares of one.
+
+**`msc` is a gauge, not yet a sizing input.** The risk of N positions scales with
+`sqrt(N × [1 + (N−1) × correlation])`, so at N = 1, one symbol in one account, the correlation term is
+exactly 1 and drops out at any strength. Sizing on `msc` there shrinks positions for no reason. Read
+it instead as a warning light: a high `msc` means the basket has collapsed into a single bet and your
+diversification is imaginary. It becomes a real sizing input once several symbols share one account.
+
+The **Reference: risk-adjusted position sizing** template in the strategy picker is a complete,
+commented working example (40 CAC 40 names, SuperTrend signal, a response knob you can set to 0 to
+reproduce the control run).
 
 ---
 
