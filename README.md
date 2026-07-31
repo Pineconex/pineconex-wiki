@@ -592,8 +592,15 @@ pipeline stage, and export the classifier **without** the ZipMap step
 ### Training a regime model on the platform (HMM)
 
 Everything above assumes you trained a model elsewhere and uploaded it. There is one model the
-platform will fit **for** you, on the **Train ONNX** tab of the Models page: a **hidden Markov
-model** of the instrument's volatility regimes.
+platform will fit **for** you, on the **Train ONNX** tab of the Models page: a **Gaussian hidden
+Markov model** of the instrument's volatility regimes.
+
+It is a **Gaussian hidden Markov model**, fitted by **Baum-Welch (expectation-maximisation)** —
+the states are Gaussians over your chosen features, and the fit estimates their means, variances
+and the probabilities of moving between them, all at once. Emissions are diagonal, meaning features
+are treated as independent given the state, so pick features that are close to orthogonal rather
+than two measures of the same thing. The fit is deterministic: the same inputs give a byte-identical
+model.
 
 It learns, unsupervised, that a market alternates between a quiet state and a turbulent one — how
 far apart those states are, how long each tends to last, and how likely a switch is on any given
