@@ -19,6 +19,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Parameter Sweep](#parameter-sweep)
 - [Validation](#validation)
 - [Machine Learning Models](#machine-learning-models)
+  - [Training a regime model on the platform (HMM)](#training-a-regime-model-on-the-platform-hmm)
 - [Gamma Exposure (GEX)](#gamma-exposure-gex)
 - [Regime-aware sizing (VMSC)](#regime-aware-sizing-vmsc)
 - [Live Trading](#live-trading)
@@ -587,6 +588,59 @@ pipeline stage, and export the classifier **without** the ZipMap step
 > **Determinism.** The same model file and the same bars always produce the same prediction, in a
 > backtest and in a live bot alike. There is no GPU and no randomness at prediction time — that is a
 > feature, not a limitation, because it is what makes a backtest trustworthy.
+
+### Training a regime model on the platform (HMM)
+
+Everything above assumes you trained a model elsewhere and uploaded it. There is one model the
+platform will fit **for** you, on the **Train ONNX** tab of the Models page: a **hidden Markov
+model** of the instrument's volatility regimes.
+
+It learns, unsupervised, that a market alternates between a quiet state and a turbulent one — how
+far apart those states are, how long each tends to last, and how likely a switch is on any given
+bar. You never label anything, which is the point: nobody can honestly label which historical bars
+were "calm", and labelling them by what happened next is lookahead.
+
+Pick the instrument, a timeframe, and **two date windows**. The model is fitted on the training
+window only and then scored on the test window with its parameters frozen. The windows may not
+overlap and there is no single-window form — fitting and scoring on the same bars makes any regime
+model look excellent while telling you nothing, so it is refused rather than allowed and warned
+about. When the job finishes the model appears in your registry like any uploaded one, versioned
+the same way.
+
+**How it is used is unusual, and worth understanding before you write the Pine.** The model is
+stateless: it scores *one bar* and returns how typical that bar is under each regime. Those are
+not probabilities and do not sum to 1. Which regime you are actually *in* depends on the whole
+history, so that part is computed in your strategy, one line of Bayes per bar:
+
+```
+belief_now = normalise( (belief_yesterday × transitions) × today's_evidence )
+```
+
+The result **is** a probability vector — `0.15` really does mean "15% chance we are in that state
+right now". The model carries its own transition matrix and emission means in its output, so you
+never copy numbers out of the results into your script; a refit is a version bump and nothing else.
+
+Two ready-made strategies in `templates/hmm/` implement the recursion for you:
+
+- **`hmm_regime_gate.pine`** — take entries only in the regime you choose. Exits are never gated:
+  a regime flip must not leave you holding a position with the exit rule switched off.
+- **`hmm_position_sizing.pine`** — take every entry, but size it against the volatility you expect
+  next. The model's emission means give a genuine forward volatility estimate, so this is real
+  volatility targeting rather than "scale the position by a probability", which has no units.
+
+**Which regime to trade in is not obvious, and the intuitive answer is often wrong.** "Only trade
+when the market is calm" sounds like risk management. Measured on the S&P 500 daily, on a
+mean-reversion strategy, it turned +7.8% into −4.0%, while trading *only in the turbulent regime*
+gave +14.3% on a third of the drawdown. Mean reversion needs volatility to revert from; in a calm
+grind upward a sharp dip is a real change of direction, not noise to be bought. Test both
+directions, and then run [Significance](#significance--is-the-edge-real-or-luck) — picking the
+better of two directions on one instrument is selection, not evidence.
+
+**When to retrain.** Less often than you would think. The bar-by-bar belief update already tracks
+regime changes; retraining is only for when the regimes themselves drift. The job reports the
+average log-likelihood on both windows — if the test figure later falls well below what the fit
+achieved, the market no longer looks like anything the model knows, and *that* is the signal to
+refit. A calendar is not.
 
 ### The discipline
 
