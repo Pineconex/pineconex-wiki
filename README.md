@@ -627,6 +627,13 @@ Two ready-made strategies in `templates/hmm/` implement the recursion for you:
 - **`hmm_position_sizing.pine`** — take every entry, but size it against the volatility you expect
   next. The model's emission means give a genuine forward volatility estimate, so this is real
   volatility targeting rather than "scale the position by a probability", which has no units.
+- **`hmm_vmsc_basket_regime.pine`** — advanced. Regimes of a whole **basket** rather than one
+  instrument, by training on [VMSC](#regime-aware-sizing-vmsc) instead of a price series (set
+  `features: "vmsc"` and pass a `universe` instead of a symbol). A state is then a property of the
+  market: "dispersed, many independent opportunities" versus "one position wearing twelve tickers",
+  the state in which a basket strategy's assumed diversification quietly stops existing. It also
+  replaces the thing everyone writes by hand — `v > 0.30 and msc < 0.35`, two numbers you guessed,
+  flickering day to day — with fitted, persistent states and a probability you can size on.
 
 **Which regime to trade in is not obvious, and the intuitive answer is often wrong.** "Only trade
 when the market is calm" sounds like risk management. Measured on the S&P 500 daily, on a
