@@ -33,6 +33,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Market Data](#market-data)
   - [What a bar contains (OHLCV)](#what-a-bar-contains-ohlcv)
   - [Supported sources](#supported-sources)
+  - [Data quality: what is checked when data is fetched](#data-quality-what-is-checked-when-data-is-fetched)
   - [Reading another symbol (request.security)](#reading-another-symbol-requestsecurity-do-not-mix-vendors)
 - [Brokers](#brokers)
 - [Plans](#plans)
@@ -1190,6 +1191,27 @@ You are not limited to those: any arithmetic on the raw fields is a valid series
 The source list offered for a symbol is filtered to the sources that actually carry it — a source that has no ticker for the symbol is not selectable.
 
 > **For deep intraday crypto history, use Bitstamp.** It is the only source that reaches it: Yahoo cuts intraday off at 730 days and Alpaca's crypto data starts in 2021, while Bitstamp's public series goes back to **2011** and quotes real BTC/USD (not a USDT proxy). A multi-year hourly Bitcoin backtest is only reproducible from this source.
+
+### Data quality: what is checked when data is fetched
+
+Every dataset is scanned the moment it is fetched, in one pass over the bars, before it is stored. The findings are attached to the catalog entry and shown on the Data page. **The data itself is never modified by the scan**, so what you get is what the vendor sent, plus a note about what looks wrong with it.
+
+Four things are flagged:
+
+| Finding | What it means |
+|---------|---------------|
+| `cliff` | A close-to-close move large enough to be suspicious. Usually a mishandled corporate action: a split or a large dividend that the vendor applied to some bars and not others. |
+| `non_positive` | A bar with a close or low at or below zero. Always broken data. |
+| `ohlc_incoherent` | `high` below `low`, or an open or close outside the bar's own range. Structurally impossible. |
+| `ts_disorder` | Bars out of chronological order, or duplicated timestamps. |
+
+The cliff threshold depends on the asset class, because "impossibly large" is not the same number everywhere. Stocks and ETFs warn at a 40% single-bar move and mark 90% as almost certainly a corporate-action error. Crypto, which genuinely does move 20 to 30% in a day, only warns at 60% and marks 150%. Forex is tightest, since majors move around 1% a day: 8% is an event worth checking, 30% is a defect.
+
+**Why this matters more than it sounds.** A split cliff is not noise, it is a fake 300% overnight gain sitting in your price history. An optimizer will find it and build a strategy around it, and the backtest will look extraordinary. One real example in this catalog: a daily series showed a +295% single-bar move on 2006-05-18, which was a 4-for-1 split applied to the later bars only. Nothing about the strategy is wrong in that case; the edge is entirely in the data.
+
+A flagged dataset is still usable, and often the flag is a real event rather than a defect. The point is that you get told, so you can look at the bar before trusting a result that depends on it. Where a finding is a genuine defect, the Data page offers repairs: sorting, removing duplicate timestamps, dropping non-positive bars, and rescaling every bar before a given date by a ratio, which is the manual fix for a split the vendor got wrong. A repair re-scans afterwards and reports whether the series now comes back clean.
+
+Note that **nothing is adjusted for dividends automatically**, and sources differ in how they handle splits. Two vendors can hand you materially different histories for the same instrument, which is the other reason not to mix them.
 
 ### Reading another symbol (`request.security`): do not mix vendors
 
