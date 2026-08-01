@@ -33,6 +33,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Market Data](#market-data)
   - [What a bar contains (OHLCV)](#what-a-bar-contains-ohlcv)
   - [Supported sources](#supported-sources)
+  - [Reading another symbol (request.security)](#reading-another-symbol-requestsecurity-do-not-mix-vendors)
 - [Brokers](#brokers)
 - [Plans](#plans)
 
@@ -1189,6 +1190,26 @@ You are not limited to those: any arithmetic on the raw fields is a valid series
 The source list offered for a symbol is filtered to the sources that actually carry it — a source that has no ticker for the symbol is not selectable.
 
 > **For deep intraday crypto history, use Bitstamp.** It is the only source that reaches it: Yahoo cuts intraday off at 730 days and Alpaca's crypto data starts in 2021, while Bitstamp's public series goes back to **2011** and quotes real BTC/USD (not a USDT proxy). A multi-year hourly Bitcoin backtest is only reproducible from this source.
+
+### Reading another symbol (`request.security`): do not mix vendors
+
+`request.security("NASDAQ:MSFT", "D", close)` pulls a second instrument into your strategy: a pair spread, an index filter, a correlated leg, a volatility gauge. The platform resolves a data source **per symbol**, so the peer you ask for can easily arrive from a different vendor than the one serving your chart.
+
+> **Fetch every symbol in a cross-symbol strategy from the same source.** Data from two vendors is not interchangeable, and mixing it is the most common way a cross-symbol strategy produces confident, wrong numbers. The Data page shows the source each symbol and timeframe was fetched from; set them all to one source before you build on the result.
+
+The reason this deserves a warning rather than a footnote is that it fails *quietly*. Nothing errors. The peer arrives, the values are finite and plausible, the strategy trades on them, and the report looks like any other. Three things differ between vendors, in rough order of how easy they are to miss.
+
+**1. Bar timestamps.** Vendors stamp the same daily session at different times: Saxo writes daily bars at 00:00 UTC, Alpaca at 04:00, Yahoo at 07:00 or 08:00 depending on daylight saving. Nothing in the prices reveals it. Because a no-repaint read means "the last peer bar at or before this bar", a peer stamped later than your chart fails that test for its own session, and **yesterday's** peer value is served instead, on nearly every bar and in one direction only. PineconeX normalises daily and higher bars to the day, so this specific case is handled for you. It is worth knowing about anyway, because it is why your peer series is not stamped the way the vendor sent it.
+
+**2. Which intraday bars exist at all.** This one cannot be repaired by shifting timestamps, because it is a coverage difference rather than an offset. Measured on two sources for the same NASDAQ listing at 15 minutes: one serves 26 bars per day (13:30 to 19:45 UTC, the regular session only), the other serves 44 (08:00 to 20:00, including pre-market and after-hours). Lining those up would mean inventing bars that one vendor never recorded. So **an intraday peer must come from the same source as the job**, and if no source can serve it there, the job is refused with an explanation instead of running on a gap-filled series.
+
+**3. The prices themselves.** Sources disagree about split and dividend adjustment, about which venues they consolidate, and about how a bar is built from quotes. A spread, ratio or correlation computed across two vendors is partly measuring the vendors rather than the two instruments. For pair trading this is easily enough to manufacture a relationship that is not there, or to hide one that is.
+
+Three related limits worth knowing:
+
+- **A cross-symbol peer never silently returns `na`.** If it cannot be resolved, the job is refused up front, naming the call and the reason. This matters because `na` is not an error in Pine: a strategy reading `na` simply never fires, and the report then says "no signal" when the truth is "no data".
+- **Backtest and live read different plumbing.** A backtest reads the peer from the stored data catalog; a live bot fetches it from your broker. Same strategy, potentially a different vendor. Validate a cross-symbol strategy against the source you actually intend to trade on.
+- **Peers on different exchanges do not align intraday.** Two venues keep different trading hours and different holiday calendars, so their intraday bars do not correspond even when both are stamped correctly. Daily is fine; intraday across exchanges is not supported.
 
 ### Data retention
 
