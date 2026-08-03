@@ -23,6 +23,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Gamma Exposure (GEX)](#gamma-exposure-gex)
 - [Regime-aware sizing (VMSC)](#regime-aware-sizing-vmsc)
 - [Live Trading](#live-trading)
+  - [Performance](#performance)
   - [Execution routing](#execution-routing)
   - [Options routing (Alpaca)](#options-routing-alpaca)
   - [Multi-symbol baskets](#multi-symbol-baskets)
@@ -32,6 +33,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
   - [The tape.* namespace](#the-tape-namespace)
 - [Market Data](#market-data)
   - [What a bar contains (OHLCV)](#what-a-bar-contains-ohlcv)
+  - [Price structure — what the market did before your strategy](#price-structure--what-the-market-did-before-your-strategy)
   - [Supported sources](#supported-sources)
   - [Data quality: what is checked when data is fetched](#data-quality-what-is-checked-when-data-is-fetched)
   - [Reading another symbol (request.security)](#reading-another-symbol-requestsecurity-do-not-mix-vendors)
@@ -232,6 +234,12 @@ Once the job completes, the results page shows:
 - **Metrics** — net profit, gross profit/loss, max drawdown, Sharpe ratio, win rate, profit factor, average trade, number of trades, and more.
 - **Logs** — raw container output for debugging.
 - **AI analysis** — optional one-click AI narrative summarising performance (requires a configured AI provider).
+
+> The report used to carry a **Data** block (Hurst, variance ratio, price structure). It has moved
+> to the Data page's [Structure tab](#price-structure--what-the-market-did-before-your-strategy),
+> because it described the *price series* — so it was identical for every strategy ever run on that
+> dataset, the same three numbers on every winner and every loser, sitting next to figures that
+> really were the strategy's.
 
 ### Comparing backtests
 
@@ -871,6 +879,45 @@ If Telegram notifications are configured, each bot also sends a periodic **heart
 
 When auto-restart is on, the platform will restart the bot automatically if it crashes, up to a configured limit. The restart count is shown on the bot card.
 
+### Performance
+
+**Live → Performance** compares your running bots against each other. It is realized only: a trade
+enters the figures when it closes at a price the broker gave us, and not before. Open positions
+have no result yet and live on their own page.
+
+Every figure is a **ratio**, never an absolute amount, because absolute figures are not comparable
+between bots. A round trip is scored as `(exit − entry) / entry` — a price return — so a €500
+account and a €500,000 account running the same strategy on the same instrument produce the same
+number, and bots on different brokers, currencies and timeframes can be ranked side by side.
+
+| Column | What it tells you |
+|---|---|
+| **Avg / trade**, **Median** | The edge per trade. A large gap between them means one outlier is carrying the average — common at small sample sizes. |
+| **Sharpe** | Reward per unit of risk (mean ÷ standard deviation of the trade returns). The closest single number to "better". |
+| **SQN** | The same ratio scaled by how much evidence backs it, so a bot with two lucky trades cannot top the ranking. The table sorts on this by default. |
+| **Exposure**, **% / mkt-day** | How hard the capital worked rather than sat idle. Two bots at the same return per trade are not equivalent if one is in the market 10% of the time and the other 90%. |
+| **Share** | What fraction of the position size deployed on *that account* this bot is getting. |
+| **Max DD**, **Max L** | Worst fall of the cumulative trade-return series, and the longest losing run. |
+
+Every column sorts (click again to reverse) and every column filters — `contains` on the text
+columns, `min`/`max` on the numbers. A row near the top on SQN and near the bottom on Share is a
+strategy earning well on less of the money than its peers. **The page shows that and stops there;
+it does not tell you what to do about it.**
+
+> **Two things these numbers are not.** They are **gross** — commissions and broker fees are not
+> included, so they are not comparable with your backtests, which run a 0.2% commission; a strategy
+> with a real but sub-fee edge looks fine here and is not. And they are **strategy performance, not
+> account performance**: every figure comes from what the bot itself did, so trades you placed by
+> hand in the same account, fills that landed after a bot stopped, and broker liquidations are not
+> in them. Your broker account remains the source of truth for money.
+
+Sharpe is deliberately **not annualised**: scaling it by trades-per-year needs a rate a two-day-old
+bot does not have and assumes trades are independent, which they are not. Read it as reward per
+unit of risk, per trade.
+
+Bars under about ten closed trades are flagged: a ranking built on two trades is luck, not edge,
+and the Trades column's `min` filter is the first one to reach for.
+
 ### How orders are executed
 
 It is important to understand how a live bot turns a strategy signal into a broker order:
@@ -878,6 +925,11 @@ It is important to understand how a live bot turns a strategy signal into a brok
 - **Bots act on bar close.** On each new completed bar, the bot evaluates your strategy. A plain `strategy.entry` becomes a **market order** at that moment.
 - **`limit=` and `stop=` become real broker orders.** `strategy.entry(limit=…)` places an actual resting limit order at your broker — it may fill later, or never. And `strategy.exit(limit=…, stop=…)` places a native **OCO** pair on Saxo and Alpaca equities: a resting stop and a resting take-profit, linked by the broker so that whichever one fills cancels the other. The stop moves as your strategy trails it.
 - **The entry price is the broker's real fill, not the bar close.** The bot reads the executed price back from the broker (Saxo, Alpaca, Bitstamp), so `strategy.position_avg_price` — and any stop or target computed from it — is based on what you actually paid, not on a bar close that is already minutes stale.
+- **Every order carries a reference back to the bot that placed it.** Orders are tagged
+  `pcx-<strategy>-<job>-…` in your broker's own order history (Alpaca and Bitstamp `client_order_id`,
+  Saxo `ExternalReference`), so a trade in your broker's report can be traced to a specific bot
+  rather than guessed at from the symbol and the time — which is ambiguous as soon as two bots on
+  one account trade the same instrument.
 - **PineconeX does not track your live profit & loss.** It records lifecycle events (started, stopped, crashed) and the signals it acted on, but it does not reconcile partial fills or rejections into a running P&L. **Your broker account is the source of truth** for real positions, fills, and P&L — always confirm there.
 
 > Live results can still differ from a backtest on identical signals: a backtest fills at modelled prices at the bar close, while a live order fills at whatever the market gives you — and a live resting stop can be hit *inside* a bar, where a backtest would only have seen the bar's close. The divergence is by design: live is native, backtest is simulated.
@@ -1176,6 +1228,63 @@ Pine also derives four **average-price series** from those fields, and you can u
 You are not limited to those: any arithmetic on the raw fields is a valid series, so `(high + low + open) / 3` or `close - open` work just as well. Writing `ta.sma(ohlc4, 20)` instead of `ta.sma(close, 20)` gives a moving average that reacts to the whole bar rather than to one instant of it — often a meaningful difference on higher timeframes, where a single closing print carries a lot of noise.
 
 > **Volume is not universal.** Equity and crypto sources carry real traded volume, but **FX bars do not** — Saxo returns bid/ask quotes for FX with no trade field, so volume arrives as `0`. A strategy that filters on volume will therefore never trigger on an FX symbol. Check the series before you depend on it. When a daily dataset is resampled to weekly or monthly, volume is **summed** across the period while OHLC is taken as first/max/min/last, which is the correct aggregation.
+
+### Price structure — what the market did before your strategy
+
+The **Data** page has two tabs. **Datasets** is about acquiring data; **Structure** is about
+characterising it. They are different activities, and the second one asks a question no backtest
+can answer for you: *what does this market do on its own?*
+
+Three headline numbers:
+
+| | |
+|---|---|
+| **Variance ratio** | Below 1, multi-bar moves are **smaller** than the sum of their parts — steps partly cancel, i.e. the market reverts. Above 1 they reinforce, i.e. it trends. At 1 it is a random walk. The `z` beside it says whether the reading is real or sampling noise. |
+| **Price structure** | The verdict — *mean reverting*, *trending*, or *random walk* — read off the variance ratio and its z. |
+| **Lag-1 autocorrelation** | How much one bar's return relates to the previous bar's. Negative = reversion, positive = continuation. |
+
+> **"Random walk" is a statement about the measurement as much as about the market.** A short
+> window simply cannot detect a small effect, so the panel tells you how small an effect these bars
+> *could* have resolved. Read that sentence before concluding an instrument has no structure — the
+> honest answer is often "this sample cannot tell", which is not the same claim.
+
+**Why not Hurst?** Because it answers a different question. The R/S Hurst exponent measures
+long-range dependence across many horizons, while a mean-reversion strategy trades the *one-step*
+kind. Measured on artificial series whose behaviour is known by construction, a Hurst rule cannot
+return "mean reverting" for any realistic market: a series that reverts by definition still reports
+Hurst 0.573, which such a rule calls "trending". The variance ratio separates those cases cleanly.
+Hurst is still shown where it appears — it is simply not the number to act on.
+
+**Return autocorrelation by lag.** One bar per lag: how much a bar's return relates to the return
+that many bars earlier. Lag 1 is the previous bar, lag 30 is thirty bars back — so on a 60m dataset
+that is one hour ago and roughly three-and-a-half sessions ago. Blue below zero is reversion, amber
+above is continuation, and the shaded strip is the 95% band. Bars inside it are indistinguishable
+from noise.
+
+> The band is *per lag*, so across 30 lags roughly 1.5 bars are expected to clear it **by chance
+> alone**. A lone coloured bar out in the tail is usually exactly that. It counts for something when
+> it is part of a run starting at lag 1, or when it lands on a meaningful period — near one bar per
+> session apart, for instance, it is time-of-day seasonality rather than memory.
+
+This chart also decides the **block size** for a [Significance](#significance--is-the-edge-real-or-luck)
+test: how far the memory reaches is how big a block has to be for shuffling to be fair.
+
+**Structure over time.** "Mean reverting" is a claim that can stop being true, and one number over
+a decade cannot say whether the structure held throughout or died years ago. The walking window
+re-measures the same metrics over a fixed-length window that slides forward, so a regime change
+becomes visible. Each point is dated at the **end** of its window, so no point uses bars from its
+own future.
+
+> Read it as a moving average, not as a series of events: neighbouring windows share most of their
+> bars, so a turn means something once it persists for about a window's width — not at the first
+> wobble.
+
+**Strategy fit** scores the same bars against each trading archetype, 0–100. It describes the
+instrument's price structure — it is **not** a recommendation to trade it, and a high score is not
+a prediction. When the variance ratio cannot be distinguished from a random walk, *Mean Reversion*
+and *Momentum* are dimmed: those two rest on it, and inside that band the bars genuinely cannot
+tell reverting from trending, so the numbers are the limit of the measurement rather than a
+finding. *Scalping* needs live spread and depth data and is not computed yet.
 
 ### Supported sources
 
