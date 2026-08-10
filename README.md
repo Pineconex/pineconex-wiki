@@ -476,11 +476,12 @@ You can train a model **offline** — in Python, on your own machine — and the
 strategy with `ml.predict()`. The model runs inside the job container on every bar, the same way
 in a backtest and in a live bot, so what you validate is exactly what you trade.
 
-PineconeX does not train models for you and does not host a training environment. It runs the
-finished model. The format is **ONNX**, the open standard that PyTorch, TensorFlow/Keras and
-scikit-learn can all export to.
+You can also have the platform fit one **for** you: the Models page carries three trainers (a
+regime model, a direction model and a trade filter) whose output lands in your registry like any
+upload. Either way the format is **ONNX**, the open standard that PyTorch, TensorFlow/Keras and
+scikit-learn can all export to, and the same runner executes it.
 
-> **Machine learning models are a [Premium](#plans) feature.**
+> **Machine learning models are a [Premium](#plans) feature** — uploading, calling and training one.
 
 > **A model is not an edge.** Bolting a neural network onto six popular indicators does not create
 > alpha — those features have been mined by everyone for decades, and a model fit to them usually
@@ -536,6 +537,38 @@ if not na(score) and score < 0.4
   other ML setup.
 - A `//@model=` for a model you have not uploaded is caught when you validate the strategy, before
   any job runs.
+
+### What a model may be used for, and what it may not
+
+A model is a fit to a particular market, over a particular stretch of history, taking its features
+in a particular order. Every one of those is a fact about the model that a strategy can contradict
+without anything going wrong on the surface: the run completes, the numbers are in range, and they
+mean something other than what they appear to. Three rules exist for that reason, all enforced when the
+job is launched rather than left to you to remember. The fourth thing that can go wrong — passing
+the features in a different ORDER than they were fitted in — cannot be checked by anything, because
+the expressions in your `array.from` are arbitrary Pine: copy the block the Models page generates
+rather than retyping it.
+
+- **Same instrument, same timeframe.** A model fitted on daily bars of one name is refused on
+  another name or another timeframe. Every feature is a window over bars, so the same formula on
+  5-minute bars is a different quantity under the same name; and thresholds learned on one
+  instrument's distribution are simply wrong on another. The exception is a model **pooled** across
+  several instruments — pooling is what states the model is meant to generalise, so a pooled model
+  may be used on any name.
+- **Do not backtest over the training window.** A run whose date range overlaps the window the
+  model was fitted on is refused: the model has seen those bars, so the equity curve is in-sample,
+  and nothing on the report would say so. Start the run after the training window ends. This costs
+  no history — the date range gates *trading*, it does not truncate the bars, so your indicators
+  still warm up over everything before it.
+- **No significance or stress test on a gated strategy.** Both work by re-running the strategy on
+  altered bars, and the model is not refitted for each one. Your real run would be scored by a
+  model fitted on exactly those bars while every permutation is scored by a model that has never
+  seen its path, so the p-value comes out too small and the strategy looks significant because the
+  model memorised the series. Test the ungated strategy, judge the model on its own held-out
+  window, and judge the gate by comparing a gated backtest against an ungated one.
+
+A **live bot** is exempt from the window rule only: fitting through yesterday to trade tomorrow is
+the intended workflow, not lookahead.
 
 ### Three ways to use a model
 
@@ -601,9 +634,12 @@ pipeline stage, and export the classifier **without** the ZipMap step
 
 ### Training a regime model on the platform (HMM)
 
-Everything above assumes you trained a model elsewhere and uploaded it. There is one model the
-platform will fit **for** you, on the **Train ONNX** tab of the Models page: a **Gaussian hidden
-Markov model** of the instrument's volatility regimes.
+Everything above assumes you trained a model elsewhere and uploaded it. The Models page can also
+fit one **for** you, on three tabs — a regime model (this section), a direction model (logistic
+regression over the next N bars) and a trade filter fitted to one strategy's own trades. Each is a
+job like any other: it counts against your concurrency limit and you poll it like a backtest.
+
+The first of them is a **Gaussian hidden Markov model** of the instrument's volatility regimes.
 
 It is a **Gaussian hidden Markov model**, fitted by **Baum-Welch (expectation-maximisation)** —
 the states are Gaussians over your chosen features, and the fit estimates their means, variances
@@ -857,6 +893,8 @@ reproduce the control run).
 Deploy a strategy as a live bot that connects to a broker and executes orders in real time.
 
 > **Available on every plan.** The Free plan includes **1 live trading job** with a limited lifetime (bots are stopped at the end of the trading day); Pro and Premium raise the concurrency limit and run without that daily stop.
+>
+> Live *trading* is open to everyone; three options on the launch form are not. **Basket** and **Portfolio** mode and the **Webhook URL** need Pro, and a strategy that reads a second timeframe needs Premium. Each is marked on the form, and the refusal names the plan rather than failing at the broker.
 
 ### Launching a bot
 
@@ -968,7 +1006,7 @@ Each bot carries its own settings; leave a field blank to use the runtime defaul
 
 ### Multi-symbol baskets
 
-**Pro plan and above.** Tick **Basket** on the launch form to have a *single* bot trade several symbols in one process, over one shared timeframe and one broker account, instead of launching one bot per symbol. It counts as one job against your concurrency limit.
+**Pro plan and above** — as is **Portfolio** mode, and the portfolio backtest and sweep that share the same book model. Tick **Basket** on the launch form to have a *single* bot trade several symbols in one process, over one shared timeframe and one broker account, instead of launching one bot per symbol. It counts as one job against your concurrency limit.
 
 - **One combined heartbeat.** A basket sends a single Telegram overview — a per-symbol table (price, position, live P&L) plus a net summary — rather than one message per symbol.
 - **One position per symbol**, evaluated at the same bar close across the basket.
@@ -1410,9 +1448,10 @@ CME futures through a prop-firm account, over the Tradovate gateway. **New — t
 | Backtesting | Yes | Yes | Yes |
 | Parameter sweep | Yes | Yes | Yes |
 | Validation (significance + stress) | — | — | Yes |
-| Machine learning models | — | — | Yes |
+| Machine learning models (upload + call) | — | — | Yes |
+| Train a model on the platform (regime / direction / trade filter) | — | — | Yes |
 | Live trading | 1 job (limited lifetime) | Yes | Yes |
-| Multi-symbol basket (universe) jobs | — | Yes | Yes |
+| Multi-symbol basket (universe) jobs, incl. portfolio backtest + sweep | — | Yes | Yes |
 | Telegram notifications | — | Yes | Yes |
 | Webhook signals | — | Yes | Yes |
 | Multi-timeframe support | — | — | Yes |
