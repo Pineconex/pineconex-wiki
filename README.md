@@ -13,6 +13,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Getting started](#getting-started)
 - [Strategies](#strategies)
   - [Learning Pine Script v6](#learning-pine-script-v6)
+  - [Write-protected strategies](#write-protected-strategies)
   - [Same-bar stop and target (the bar magnifier)](#same-bar-stop-and-target-the-bar-magnifier)
 - [Backtest](#backtest)
 - [Debugging with log.info()](#debugging-with-loginfo)
@@ -23,6 +24,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Gamma Exposure (GEX)](#gamma-exposure-gex)
 - [Regime-aware sizing (VMSC)](#regime-aware-sizing-vmsc)
 - [Live Trading](#live-trading)
+  - [Fleet snapshot](#fleet-snapshot)
   - [Performance](#performance)
   - [Execution routing](#execution-routing)
   - [Options routing (Alpaca)](#options-routing-alpaca)
@@ -86,6 +88,22 @@ Open a strategy and click the **Share** button. You can make it:
 - **Private** — only you can see it.
 - **Open** — anyone with the link gets a private, editable **copy** of the strategy added to their own account (a fork). They get the full code, but as their own copy — your original is untouched.
 - **Protected** — link required *plus* you grant access per user. Granted users can run backtests and live bots with the strategy, but the **source code stays private** — it is never shown to them. The strategy is shared; the code is not.
+
+### Write-protected strategies
+
+A strategy is locked against editing while a live bot is running it, or while it is held in your [fleet snapshot](#fleet-snapshot). The tile shows a **Write-protected** badge, the editor opens read-only, and Save is replaced by an explanation. Validate still works, since reading and checking a file is always safe.
+
+The reason is not caution, it is that editing would not do what it looks like it does. **A bot runs the code it was launched with.** The source is copied into the bot when it starts and is never re-read, so editing the file under a running bot cannot change what is trading. All it would do is make the file disagree with the account, on the very page you would look at to find out what a bot is running.
+
+The snapshot extends the same protection forward in time. Restore relaunches from the file as it reads then, so an edit made while the bots are down would change what Restore starts, and the snapshot would name one fleet and start another.
+
+The `.pine` and its `.json5` lock together, because a bot froze both when it launched.
+
+To edit a locked strategy, stop the bot, or save a new snapshot that does not include it. If you want to try changes while a bot keeps running, copy the strategy and edit the copy.
+
+This applies to strategies **hosted on PineconeX**. A strategy imported from GitHub is already read-only here, and its real file lives in your repository, where this platform cannot protect it.
+
+Alongside the badge, each tile shows either a live indicator (how many bots are running it right now) or the date it last ran live, never both.
 
 ### Parameter overrides (JSON5)
 
@@ -916,6 +934,28 @@ If Telegram notifications are configured, each bot also sends a periodic **heart
 ### Auto-restart
 
 When auto-restart is on, the platform will restart the bot automatically if it crashes, up to a configured limit. The restart count is shown on the bot card.
+
+### Fleet snapshot
+
+Auto-restart handles one bot crashing. It does not help when the machine underneath them goes away.
+
+A live bot is a container on a runner host. The platform's own services can restart without disturbing a running bot, but if the runner host reboots or its Docker daemon restarts, every container stops at once. Nothing is lost (positions are at your broker, and each bot's trade log survives on disk), but you come back to an empty Active bots table and, without a snapshot, you relaunch each bot by hand.
+
+**Save snapshot** records which bots are running. **Restore fleet** starts them all again in one click.
+
+You keep one snapshot: the last one you saved. Saving again replaces it, which is how you record a fleet you have changed. Stop the bots you no longer want, then save again. To discard a snapshot entirely, stop everything and save with nothing running.
+
+Both buttons sit next to **Start Bot** on the Live Bot Manager, because they are the same job at two scales: Start Bot launches one, Restore fleet launches the set.
+
+**Restore is never automatic, and that is deliberate.** After a real outage your broker credentials are usually gone too. A Saxo refresh chain expires within the hour, and logging out clears stored broker tokens by design. An automatic restore would fire a row of doomed launches at dead credentials before you had a chance to reconnect. So:
+
+1. Reconnect your broker.
+2. Press **Restore fleet** and confirm. The dialog names the bots that will start.
+
+A partial restore is normal, and the result names every bot that did not start along with the reason: a broker not yet reconnected, a runner still offline, or your plan's concurrent-job limit reached. Bots already running are left alone, so pressing Restore twice is safe.
+
+Restoring reuses the original bots rather than creating copies, so each one keeps its trade history and picks its position back up at the broker exactly as a crash-restart would. If you launch new bots after saving, the page tells you the snapshot no longer matches what is running, so you can save again. It is never updated silently.
+
 
 ### Performance
 
