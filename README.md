@@ -946,17 +946,81 @@ if strategy.position_size > 0 and close > vah
     strategy.close("L")
 ```
 
+There are three ways to choose which bars go into the profile:
+
+| call | the bars it profiles |
+|---|---|
+| `vp.rolling(length, bins, va)` | the last `length` chart bars |
+| `vp.session(anchor, bins, va, id)` | everything since `anchor` was last true |
+| `vp.intrabar(tf, length, bins, va)` | the same rolling window, binned from a lower timeframe |
+
+All three return `[poc, vah, val]`. Then the readings off a rolling profile:
+
 | call | returns |
 |---|---|
-| `vp.rolling(length, bins, va)` | `[poc, vah, val]`, all three at once |
 | `vp.poc(length, bins)` | the point of control on its own |
 | `vp.vah(length, bins, va)` / `vp.val(length, bins, va)` | the value area edges on their own |
+| `vp.va_pos(length, bins, va)` | where the close sits inside the value area: 0 at the low edge, 1 at the high |
+| `vp.va_width(length, bins, va)` | the value area's width as a percent of the POC |
+| `vp.lvn_below(length, bins)` / `vp.lvn_above(length, bins)` | the nearest low-volume node below or above price |
 | `vp.histogram(length, bins)` | `array<float>` of bin volumes, lowest price first |
 | `vp.bin_low(length, bins, i)` | the price floor of bin `i` of that histogram |
 
 `bins` defaults to 50 and `va` to 0.7. The single-value calls are not a slower path: all of them
-share one cached window per `(length, bins)` and one result per bar, so reading all three levels
+share one cached window per set of arguments and one result per bar, so reading all three levels
 costs the same as reading one.
+
+### The session profile
+
+`vp.session` accumulates instead of sliding. You give it a bool that says "start again", and it
+profiles everything since that last fired. A daily profile is the usual case:
+
+```pine
+newDay = ta.change(time("D")) != 0
+[poc, vah, val] = vp.session(newDay, 50)
+```
+
+Two differences from `vp.rolling` are worth knowing. It answers from the **first** bar of a
+session rather than waiting for a window to fill, so early-session levels are thin and built from
+very few bars. And it must be called on **every** bar: the anchor is something your script decides
+per bar, so a bar the call was skipped on has no anchor that could be recovered.
+
+The `id` (default 0) exists only if you run **more than one** session profile. The identity of a
+session is its anchor, and an anchor is a bool arriving each bar rather than something the call can
+be recognised by, so two profiles with different anchors need different ids or they would share one
+accumulation and both be wrong.
+
+### Low-volume nodes
+
+A node is the opposite of the POC: a thin band price moved **through** rather than traded at, which
+is where it tends to move quickly again. That makes it a natural place to put a stop, past the void
+rather than at a round number.
+
+```pine
+stop = vp.lvn_below(500, 50)
+if not na(stop)
+    strategy.exit("X", "L", stop = stop * 0.999)
+```
+
+It finds a dip the profile comes back **up** from, rather than simply the thinnest bin. A profile
+always thins out toward its edges, so "thinnest" would nearly always answer with the outermost bin:
+true, and useless. Where there is no gap on that side of price, the call returns `na`, which is an
+ordinary outcome to guard rather than an error.
+
+### Profiling the lower timeframe
+
+Binning a chart bar spreads its volume across the whole range that bar covered, which is a guess:
+the bar does not record where inside its range the trading happened. `vp.intrabar` uses a finer
+series instead, so the volume lands where it actually traded.
+
+```pine
+[poc, vah, val] = vp.intrabar("5", 500, 50)
+```
+
+The window still slides one **chart** bar at a time; only the resolution inside each bar changes.
+It needs the job to have a lower-timeframe series (the same one `request.security_lower_tf` reads),
+and it says so plainly if there isn't one rather than returning `na`, which would be
+indistinguishable from warmup.
 
 ### What to know before you build on it
 
