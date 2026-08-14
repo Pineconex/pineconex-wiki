@@ -23,6 +23,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
   - [Training a regime model on the platform (HMM)](#training-a-regime-model-on-the-platform-hmm)
 - [Gamma Exposure (GEX)](#gamma-exposure-gex)
 - [Regime-aware sizing (VMSC)](#regime-aware-sizing-vmsc)
+- [Volume Profile (vp.*)](#volume-profile-vp)
 - [Live Trading](#live-trading)
   - [Fleet snapshot](#fleet-snapshot)
   - [Performance](#performance)
@@ -903,6 +904,90 @@ diversification is imaginary. It becomes a real sizing input once several symbol
 The **Reference: risk-adjusted position sizing** template in the strategy picker is a complete,
 commented working example (40 CAC 40 names, SuperTrend signal, a response knob you can set to 0 to
 reproduce the control run).
+
+---
+
+## Volume Profile (vp.*)
+
+A **volume profile** answers a question a moving average cannot: not where price has been, but at
+which price the trading actually happened. PineconeX bins the volume of a rolling window of bars
+across the price range those bars covered, and hands you the result as a `vp.*` namespace.
+
+On TradingView, Volume Profile is a built-in *indicator* on paid plans, not a Pine function, so
+there is nothing to port. A script using `vp.*` runs on PineconeX only.
+
+Three levels come out of it:
+
+| | |
+|---|---|
+| **POC** (point of control) | the price the window traded the most volume at |
+| **VAH / VAL** (value area high / low) | the band around the POC holding a chosen share of the window's volume, conventionally 70% |
+
+Why it is worth having alongside what you already use: `ta.sma` is **time**-weighted, so every bar
+counts once, and the highest high and lowest low are decided by **two** bars. The POC is
+**volume**-weighted, so a week of heavy accumulation outweighs a month of quiet drift, and a spike
+low that nobody traded at moves it not at all.
+
+### Reading it in Pine
+
+```pine
+//@runtime=2026.08.14-vp
+//@version=6
+strategy("Value area gate", overlay = true)
+
+[poc, vah, val] = vp.rolling(500, 50)
+
+// take an existing signal only at a discount to the volume-agreed price
+raw = ta.crossover(close, ta.sma(close, 20))
+if raw and not na(poc) and close < poc and close > val
+    strategy.entry("L", strategy.long)
+
+if strategy.position_size > 0 and close > vah
+    strategy.close("L")
+```
+
+| call | returns |
+|---|---|
+| `vp.rolling(length, bins, va)` | `[poc, vah, val]`, all three at once |
+| `vp.poc(length, bins)` | the point of control on its own |
+| `vp.vah(length, bins, va)` / `vp.val(length, bins, va)` | the value area edges on their own |
+| `vp.histogram(length, bins)` | `array<float>` of bin volumes, lowest price first |
+| `vp.bin_low(length, bins, i)` | the price floor of bin `i` of that histogram |
+
+`bins` defaults to 50 and `va` to 0.7. The single-value calls are not a slower path: all of them
+share one cached window per `(length, bins)` and one result per bar, so reading all three levels
+costs the same as reading one.
+
+### What to know before you build on it
+
+- **It returns `na` until the window is full.** Guard with `not na(poc)`. A rolling profile is not
+  defined on a partial window, so there is no partial answer to give you.
+- **An instrument with no volume is refused, loudly.** Cash indices carry no traded size on any
+  data source, and Saxo's FX and CFD bars have no volume field at all. Rather than hand back a
+  "point of control" that is really just the midpoint of the window, `vp.*` stops the job and names
+  the symbol. Do not put it on DAX 40, CAC 40 or an FX pair.
+- **Sweep the window freely.** The profile slides (one bar in, one bar out) instead of being
+  rebuilt, so its cost does not grow with `length`. Measured over 5,000 bars, a 2,000-bar window
+  costs the same per bar as a 100-bar one, and less than `ta.highest` over the same window.
+- **It is built from bars, not ticks.** Each bar's volume is spread across the price range that bar
+  covered. That locates where trade concentrated; it is not an exchange volume-at-price feed.
+- **It needs no extra data.** Unlike [`gex.*`](#gamma-exposure-gex), which needs a live options
+  chain, a volume profile is computed from bars the job already has. So it behaves identically in a
+  backtest, a sweep and a live bot, on every broker.
+- **Pin the runtime.** `vp.*` needs `//@runtime=2026.08.14-vp` or later.
+
+### As a machine-learning feature
+
+The same reading is available to the [model trainers](#machine-learning-models) as **Distance from
+volume POC** (`vp_dist_poc`): the percent distance from the close to the point of control, over a
+lookback you choose.
+
+It is a *distance*, never a price. A model trained on an absolute level learns a threshold that
+sits on one side of every later price range, so the feature quietly goes dead as soon as the market
+leaves the range it was fitted in. Everything in that catalogue is relative for this reason.
+
+It also needs an instrument that reports volume, and the fit refuses one that does not rather than
+training on a column of zeros.
 
 ---
 
