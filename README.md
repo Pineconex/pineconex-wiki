@@ -22,7 +22,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Machine Learning Models](#machine-learning-models)
   - [Training a regime model on the platform (HMM)](#training-a-regime-model-on-the-platform-hmm)
 - [Gamma Exposure (GEX)](#gamma-exposure-gex)
-- [Regime-aware sizing (VMSC)](#regime-aware-sizing-vmsc)
+- [Basket readings (`basket.*`)](#basket-readings-basket)
 - [Volume Profile (vp.*)](#volume-profile-vp)
 - [Live Trading](#live-trading)
   - [Fleet snapshot](#fleet-snapshot)
@@ -197,7 +197,7 @@ strategy("My strategy", default_qty_type = strategy.percent_of_equity, default_q
 - **Whole shares only.** Equity orders are rounded **down** to whole shares; if the computed size is below one share the order is skipped. (Crypto keeps fractional size.) Because of the round-down, a `cash` or `percent_of_equity` order usually deploys slightly *less* than the nominal amount — e.g. $5,000 of a $294 stock buys 16 shares (≈ $4,714), not a fractional 16.9.
 - **`percent_of_equity` uses your real broker equity.** A live bot reads your connected account's current equity to size the order and refreshes it as the account value changes. Backtest, sweep, and validation runs use the strategy's `initial_capital` instead.
 
-> Sizing each order from the market's current volatility, instead of a fixed cash or equity fraction, is a separate feature: see [Regime-aware sizing (VMSC)](#regime-aware-sizing-vmsc).
+> Sizing each order from the market's current volatility, instead of a fixed cash or equity fraction, is a separate feature: see [Basket readings (`basket.*`)](#basket-readings-basket).
 
 #### Margin and leverage (`margin_long` / `margin_short`)
 
@@ -658,6 +658,15 @@ fit one **for** you, on three tabs — a regime model (this section), a directio
 regression over the next N bars) and a trade filter fitted to one strategy's own trades. Each is a
 job like any other: it counts against your concurrency limit and you poll it like a backtest.
 
+The trade filter answers one of two questions, and you choose which when you launch it. By default
+it returns **a probability that the trade is good**, against a definition of "good" you pick. It can
+instead return **a number: how bad the bad case is**, by estimating a percentile of the trade's own
+return — at the 10th percentile, "one trade in ten from this setup is worse than X%". The two are
+not variants of one model. A probability is compared against a threshold you cannot interpret; a
+percentile comes out in the units you size in, so it can gate on a loss you are willing to accept
+and it can feed a sizing rule. It is scored against the percentile of your training trades taken
+flat, because a tail estimate that cannot beat a single number has learned nothing.
+
 The first of them is a **Gaussian hidden Markov model** of the instrument's volatility regimes.
 
 It is a **Gaussian hidden Markov model**, fitted by **Baum-Welch (expectation-maximisation)** —
@@ -700,7 +709,7 @@ Two ready-made strategies in `templates/hmm/` implement the recursion for you:
   next. The model's emission means give a genuine forward volatility estimate, so this is real
   volatility targeting rather than "scale the position by a probability", which has no units.
 - **`hmm_vmsc_basket_regime.pine`** — advanced. Regimes of a whole **basket** rather than one
-  instrument, by training on [VMSC](#regime-aware-sizing-vmsc) instead of a price series (set
+  instrument, by training on [basket readings](#basket-readings-basket) instead of a price series (set
   `features: "vmsc"` and pass a `universe` instead of a symbol). A state is then a property of the
   market: "dispersed, many independent opportunities" versus "one position wearing twelve tickers",
   the state in which a basket strategy's assumed diversification quietly stops existing. It also
@@ -780,21 +789,24 @@ buy/sell recommendations.
 
 ---
 
-## Regime-aware sizing (VMSC)
+## Basket readings (`basket.*`)
 
-**VMSC** measures the *market regime* of a basket of symbols you name, and hands it to your strategy
-as a daily reading through a `vmsc.*` namespace. It answers two questions a single symbol's chart
-cannot:
+Everything else in Pine describes one instrument's bars. **`basket.*`** describes a *group* of
+symbols you name, and hands your strategy a daily reading of how that group is behaving. It answers
+questions a single symbol's chart cannot:
 
 - **V**, how much the basket's members move **individually** (the cross-sectional mean of per-name
   annualised realised volatility).
 - **MSC**, how much of that movement is the **same** movement (mean squared pairwise correlation over
   the basket, `0` = independent, `1` = effectively one position).
+- **Turbulence**, whether **today** was a day the basket has seen before.
+- **Concentration**, whether the crowding sits in one driver or is spread over several.
 
-The distinction is the point. High V with low MSC is many independent opportunities; high MSC is one
-position wearing twelve tickers, quietly leveraged. Volatility is opportunity *and* risk, so you
-select for it and then size against it. Correlation is only ever risk, so it can only ever shrink a
-position. There is no TradingView equivalent, so a script using `vmsc.*` runs on PineconeX only.
+The first two are the distinction the feature was built for. High V with low MSC is many independent
+opportunities; high MSC is one position wearing twelve tickers, quietly leveraged. Volatility is
+opportunity *and* risk, so you select for it and then size against it. Correlation is only ever risk,
+so it can only ever shrink a position. There is no TradingView equivalent, so a script using
+`basket.*` runs on PineconeX only.
 
 ### Reading it in Pine
 
@@ -802,25 +814,46 @@ position. There is no TradingView equivalent, so a script using `vmsc.*` runs on
 //@version=6
 //@runtime=2026.07.29-vmsc
 
-// The basket the regime is measured over. This exact statement is what names the universe.
+// The basket the readings are measured over. This exact statement is what names the universe.
 group = array.from(
      "NASDAQ:NVDA", "NASDAQ:AMD", "NASDAQ:INTC", "NASDAQ:ON", "NASDAQ:NXPI", "NASDAQ:LSCC",
      "NASDAQ:TSEM", "NASDAQ:AOSL", "NASDAQ:INDI", "NASDAQ:NVTS", "NYSE:STM", "NYSE:MX")
 
-[v, msc, score] = vmsc.calculate(group)
+[v, msc, score] = basket.vmsc(group)
+turb            = basket.turb(group)
+pc1             = basket.pc1(group)
+ebets           = basket.ebets(group)
 ```
 
-| Value | Meaning |
+| Call | Meaning |
 |---|---|
+| `basket.vmsc(g)` | `[v, msc, score]` — see below |
 | `v` | cross-sectional mean of per-name annualised volatility (`0.35` = 35% a year) |
 | `msc` | mean squared pairwise correlation over the basket, bias-corrected, in `[0, 1]` |
 | `score` | `v / max(msc, 0.05)`. The floor keeps the ratio finite in a decorrelated market, which is where the estimate is weakest |
+| `basket.turb(g)` | how unusual the basket's day was, as a distance from its own normal behaviour. **`1` is an ordinary day on any basket**, so a threshold means the same thing on every universe |
+| `basket.pc1(g)` | share of the basket's movement carried by its single largest common factor, noise floor removed. `0` = indistinguishable from independent names, `1` = one factor explains everything |
+| `basket.ebets(g)` | effective independent bets — twelve names behaving like 2.3 reads `2.3`. **Diagnostic only.** It is `msc` restated as a count, so never feed it to a model beside `msc` |
 
-All three are ordinary `series float`s: index them (`msc[1]`), window them with `ta.*`, plot them.
+Every reading is an ordinary `series float`: index it (`msc[1]`), window it with `ta.*`, plot it.
+`basket.vmsc` returns a tuple because `v` and `msc` are the *ingredients* of `score` — and `score`
+is published with them because re-deriving it by hand gets the `max(msc, 0.05)` floor wrong, exactly
+in the decorrelated market where the unfloored ratio blows up. The other three are independent
+questions, so they are plain scalars.
 
-**The argument to `vmsc.calculate()` is the universe.** PineconeX reads the array at the call site
-before the run, resolves each ticker, and precomputes the series, so the declaration has to be
-readable without executing the script:
+**Turbulence is the only reading that describes a DAY.** The rest average over the 60-day window, so
+one violent session keeps them elevated for as long as it stays inside that window and every one of
+those dates carries the same value. `msc` can tell you the basket has been crowded for two months;
+only `turb` can tell you today was the break.
+
+> **`vmsc.calculate(group)` is the obsolete spelling of `basket.vmsc(group)`.** Same three values, in
+> the same order — it is literally the same function under two names, and it still works. It is
+> frozen at three, though: `turb`, `pc1` and `ebets` are reachable only through `basket.*`. Use the
+> new spelling in new scripts; there is no need to rewrite a strategy that works.
+
+**The argument is the universe.** PineconeX reads the array at the call site before the run,
+resolves each ticker, and precomputes the series, so the declaration has to be readable without
+executing the script:
 
 - assign it at **global scope, starting at the left margin** (not inside an `if`, a `for`, or a
   function);
@@ -837,6 +870,15 @@ it does not match what was precomputed, so the script and the data can never dri
 > bot) it is `na`, and an `na` quantity does not cancel an order in Pine, it falls back to
 > `default_qty_value`. Sizing a position from an unguarded `na` trades the default size while looking
 > regime-aware. The reference template sets `default_qty_value = 0` as a tripwire for exactly this.
+>
+> **Turbulence's null is `1`, not `0`** — write `nz(turb, 1.0)`. A `0` there is not a neutral
+> stand-in, it is the calmest day ever recorded, so an unavailable reading would read as the safest
+> possible market.
+
+**One basket per strategy.** All your `basket.*` calls must name the same array. Two different
+identifiers is rejected at launch rather than resolved: the series is computed and cached per
+(universe, window) and injected one value per bar, so a second basket has nowhere to go and would
+silently read the first one's numbers.
 
 ### How the series behaves
 
@@ -857,13 +899,13 @@ it does not match what was precomputed, so the script and the data can never dri
 
 ### Where it works
 
-| Job type | VMSC |
+| Job type | Basket readings |
 |---|---|
 | Backtest, sweep, significance, stress | Full support |
 | **Live bots** | **Not delivered yet.** The readings are `na`, so an `nz()`-guarded strategy sizes neutrally and trades its base size |
 
 That live gap matters if you built the sizing rule and then deploy it: the bot will trade, and it
-will trade *flat-sized*. Until it is wired, treat VMSC as a backtest and research feature.
+will trade *flat-sized*. Until it is wired, treat these as a backtest and research feature.
 
 ### What it is actually good for
 
@@ -904,6 +946,25 @@ diversification is imaginary. It becomes a real sizing input once several symbol
 The **Reference: risk-adjusted position sizing** template in the strategy picker is a complete,
 commented working example (40 CAC 40 names, SuperTrend signal, a response knob you can set to 0 to
 reproduce the control run).
+
+### As a machine-learning feature
+
+All of these are selectable when training a model on the Models page, and they behave differently
+from a bar reading in one way worth knowing before you pick them.
+
+- **As columns of a trade filter**, they appear as *Market regime*, *Market shock* and *Market
+  concentration*. Selecting one makes the fit ask for a basket, and the generated Pine declares it
+  for you so the model is served the same universe it was fitted on.
+- **As a whole regime model**, a basket fit trains on the cross-section itself rather than on one
+  instrument's bars: a state is then a property of the market ("dispersed", or "one position wearing
+  twelve tickers") instead of a property of a stock. Choose `vmsc`, `vpc` or `turb` as the feature
+  set — the same rows and the same first column, differing in exactly one number, so the three are a
+  controlled comparison and the held-out score decides between them rather than an argument.
+
+**The caveat that applies to all of them: a value here is shared by every symbol in the basket on a
+date.** Pooling twenty instruments therefore multiplies the ROWS by twenty and this column's
+independent information by about one — its effective sample is the number of distinct dates, not the
+number of trades. Two basket columns in one model are two draws from that same small sample.
 
 ---
 
