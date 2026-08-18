@@ -213,7 +213,31 @@ If you *want* leverage, say so: `strategy(..., margin_long = 25)` is 4× (25% of
 
 `strategy(pyramiding = N)` caps how many entries may be added in the **same direction** while a position is open. The default, `pyramiding = 0`, allows a single entry — additional same-direction entry signals are ignored until the position is closed. A reversal (an opposite-direction entry) is always allowed.
 
-> **Current limitation:** a bot or backtest holds **one position at a time**, so a strategy trades a single lot regardless of the `pyramiding` value — setting it above `0` does not yet stack multiple lots.
+Entries **stack**: with `pyramiding = 3`, three same-direction entries build one larger position and the fourth is refused until the position closes. It works the same way in a backtest, a sweep and a live bot.
+
+> **Each entry is sized in full.** `default_qty_value = 25` with `pyramiding = 4` commits **100%** of equity, not 25% split four ways. Size for the stack you intend to hold rather than for one entry.
+
+> **Stacked entries close as one trade.** PineconeX holds a single netted position rather than a list of individual entries, so three stacked entries exit together, as **one** trade at their size-weighted average price. TradingView unwinds each entry separately. The total profit and loss agrees; the trade **list** and the trade **count** do not. That is also why `close_entries_rule` (FIFO vs ANY) has nothing to decide here, and is accepted and ignored.
+
+> **A pyramiding entry must be a market order.** A resting `limit=` or `stop=` entry cannot be added to a position that is already open, because a resting order cannot be matched against the position it would join. In a backtest such an order rests until it fills or expires; a live bot refuses it and says so in the job log.
+
+> **Results recorded before 2026-08-18 were measured without this.** `pyramiding` was read and then had no effect, so a strategy setting it above `0` traded a single lot. If you have numbers for such a strategy from before that date, re-run it: the old figures describe a smaller system. Strategies left at the default `0` are unaffected and their numbers stand.
+
+### Resizing a position (`strategy.order`)
+
+`strategy.order(id, direction, qty = n)` changes the size of a position that is already open, and unlike `strategy.entry` it ignores `pyramiding` entirely. It is how a strategy rebalances: volatility targeting, risk parity, rebalancing bands, and Kelly sizing all hold one position and adjust it as their estimate moves.
+
+Three cases, and the accounting differs in each:
+
+| the order is | what happens |
+|---|---|
+| the **same** direction | the position grows, and its cost basis becomes the size-weighted average of the old basis and this fill |
+| **opposite**, smaller | the position shrinks. The closed part books a real trade at the original basis; what remains keeps that basis, because selling part of a holding does not change what the rest cost |
+| **opposite**, larger | the position closes and the surplus opens the other way, as TradingView does |
+
+> **A reverse is refused where the venue cannot hold a short.** Bitstamp spot and Alpaca crypto are long only, so the closing part is placed and the surplus is refused rather than sent. The bot ends flat, and says so in the job log. Alpaca equities can hold a short, and the bot asks your account whether it may before opening one.
+
+> **Results recorded before 2026-08-18 were measured without this too.** `strategy.order` was accepted and did nothing at all, with no error and no log line, so a rebalancing strategy sized its position once and then held it unchanged. The tell is a strategy that reports **one trade** whose return equals the instrument's own price move.
 
 ### History buffer (`max_bars_back`)
 
