@@ -1276,7 +1276,7 @@ column is the venue's, and no amount of platform work will close it.
 | Resting take-profit | `strategy.exit(limit=)` | Yes | Yes | Bot-managed | Bot-managed | Yes (bracket) |
 | Stop and target linked by the venue | Sent as one OCO where it exists | Yes | Yes | **No** | **No** | Yes (bracket on the entry) |
 | Trailing a stop | Re-sent whenever your script moves the level | Amended in place | Cancel and replace | Bot-managed | Bot-managed | Cancel and replace |
-| Cancel a resting order from your script | **Not implemented** (`strategy.cancel`) | Venue supports it | Venue supports it | Venue supports it | Venue supports it | Venue supports it |
+| Cancel a resting order from your script | `strategy.cancel` / `strategy.cancel_all`, resting entries only | Yes | Yes | Yes | Yes | Yes |
 | Shorting | `strategy.entry(direction=strategy.short)` | No on stocks, yes on futures | Yes, if your account allows it | No | No | Yes |
 | Order quantity | Sized by your strategy, rounded to the venue's unit | Whole units | Whole units | Fractional | Fractional | Whole contracts |
 
@@ -1323,12 +1323,14 @@ trailing order would follow the venue's rule instead of your script's.
 - **A rejection can arrive as `200 OK`.** Bitstamp and Tradovate both report refusals inside a
   success response. PineconeX reads the body rather than the status code and surfaces the venue's own
   error in your job log.
-- **`strategy.cancel` and `strategy.cancel_all` are not sent to the broker yet.** Every venue offers
-  the call; the bot does not make it, so a strategy that rests a limit and retracts it later behaves
-  differently live than in the backtest, where the cancel happens. Live, the order stays until it
-  fills or the venue expires it. Avoid designs that queue and retract orders until this ships.
-  (The bot does cancel its own resting exits when it closes a position, when it trails a stop, and
-  when it shuts down. It is the explicit call from your script that is missing.)
+- **`strategy.cancel` withdraws a resting entry, and cannot touch a protective exit.** A cancel
+  naming an entry that is resting at the broker takes it off the book, and `strategy.cancel_all`
+  takes off whatever is resting. Your stop and take-profit are deliberately out of reach: they are
+  what stands between an open position and an unbounded loss, so they come off when the position
+  does (a close cancels its exits first, in that order) rather than on a script's say-so. A cancel
+  that matches nothing does nothing and says nothing, because calling cancel on every bar is
+  ordinary Pine. **New in v0.2.0-alpha: try it on paper or a simulation account before you rely on
+  it live.**
 - **Time in force is per venue.** Alpaca equity orders are day orders and die at the close; Alpaca
   crypto and every futures bracket leg are good-til-cancelled.
 
