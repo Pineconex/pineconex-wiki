@@ -27,6 +27,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Live Trading](#live-trading)
   - [Fleet snapshot](#fleet-snapshot)
   - [Performance](#performance)
+  - [Order flow: what each broker supports](#order-flow-what-each-broker-supports)
   - [Execution routing](#execution-routing)
   - [Options routing (Alpaca)](#options-routing-alpaca)
   - [Multi-symbol baskets](#multi-symbol-baskets)
@@ -1255,6 +1256,81 @@ It is important to understand how a live bot turns a strategy signal into a brok
 > Live results can still differ from a backtest on identical signals: a backtest fills at modelled prices at the bar close, while a live order fills at whatever the market gives you — and a live resting stop can be hit *inside* a bar, where a backtest would only have seen the bar's close. The divergence is by design: live is native, backtest is simulated.
 
 > **Stopping a live bot cancels its resting orders — it does not close the position.** On shutdown the bot cancels the entry and exit orders it left at the broker (a resting order with no bot behind it is a hazard: a stop-loss is a sell, and a sell with nothing behind it can *open a short*). What it holds is yours, so it is left alone and named in the log as unprotected. **Close the position yourself in your broker's interface** if you do not intend to relaunch — a relaunched bot re-adopts the position and re-protects it. (On Bitstamp nothing rests at the exchange in the first place — see [Crypto](#crypto).)
+
+### Order flow: what each broker supports
+
+Your Pine Script is identical on every broker. What the broker does with the order is not, and the
+differences are not cosmetic: on one venue a stop-loss rests at the exchange and fires while you
+sleep, on another there is no stop order at all and the bot has to do it.
+
+The **PineconeX** column is what the platform sends, and how you ask for it in Pine. The venue
+columns are what happens to it once it arrives. A gap in the first column is ours; a gap in a venue
+column is the venue's, and no amount of platform work will close it.
+
+| | PineconeX | Saxo (stocks, futures) | Alpaca equities | Alpaca crypto | Bitstamp spot | Prop futures (Tradovate) |
+|---|---|---|---|---|---|---|
+| Market entry and close | `strategy.entry` / `strategy.close` | Yes | Yes | Yes | Yes | Yes |
+| Limit entry | `strategy.entry(limit=)` | Yes | Yes | Yes | Yes | Yes |
+| Stop entry | `strategy.entry(stop=)` | Yes (`StopIfTraded`) | Yes | Sent as stop-limit | **No** | Yes |
+| Resting stop-loss | `strategy.exit(stop=)` | Yes | Yes | Yes (the one resting slot) | **No** | Yes (bracket) |
+| Resting take-profit | `strategy.exit(limit=)` | Yes | Yes | Bot-managed | Bot-managed | Yes (bracket) |
+| Stop and target linked by the venue | Sent as one OCO where it exists | Yes | Yes | **No** | **No** | Yes (bracket on the entry) |
+| Trailing a stop | Re-sent whenever your script moves the level | Amended in place | Cancel and replace | Bot-managed | Bot-managed | Cancel and replace |
+| Cancel a resting order from your script | **Not implemented** (`strategy.cancel`) | Venue supports it | Venue supports it | Venue supports it | Venue supports it | Venue supports it |
+| Shorting | `strategy.entry(direction=strategy.short)` | No on stocks, yes on futures | Yes, if your account allows it | No | No | Yes |
+| Order quantity | Sized by your strategy, rounded to the venue's unit | Whole units | Whole units | Fractional | Fractional | Whole contracts |
+
+"Bot-managed" means the level is real but it lives in the bot, not at the venue: it is checked at
+each bar close, and when it is hit the bot cancels whatever else is resting and closes at market.
+That is a genuine protection, but it cannot fire between two bars. If price gaps through the level
+overnight or over a weekend, you exit on the next bar close at whatever the market is then.
+
+PineconeX does not use a venue's own **trailing-stop order type** even where one exists. Your script
+owns the level: it recomputes the stop each bar and the bot moves the resting order to match, so a
+trail written in Pine behaves the same on every broker and matches what your backtest did. A native
+trailing order would follow the venue's rule instead of your script's.
+
+#### Where a venue simply does not have the order
+
+- **Bitstamp spot has no stop order, no take-profit and no OCO.** It is an exchange order book with
+  market and limit orders, and nothing else. Worse, its API *accepts* a stop price and answers
+  `200 OK` with an order id while creating nothing, so a bot that trusted the response would report
+  a stop that does not exist. PineconeX never claims one: every Bitstamp stop and target is
+  bot-managed, on a market that trades 24/7. See [Crypto](#crypto).
+- **Alpaca crypto allows one resting exit per position.** The first resting order reserves the whole
+  coin balance, so a second leg is refused. That slot is given to the stop, because it is the
+  protection, and the take-profit is bot-managed.
+- **Bitstamp is long-only.** A short entry is refused before it reaches the exchange: there is
+  nothing to borrow on spot.
+- **Saxo stock accounts do not short.** A sell with no holding behind it comes back `NotOwned`, even
+  on a margin-enabled account. Saxo futures do short.
+- **Alpaca options take limit, stop and stop-limit, but no OCO, bracket or trailing order.** Options
+  routing is described under [Options routing (Alpaca)](#options-routing-alpaca).
+
+#### Rules that catch people out
+
+- **A resting exit only exists while the position does.** Saxo refuses an exit order placed against
+  nothing, and every venue has its exits cancelled before the bot closes at market. Cancel first,
+  then close, is the order everywhere, and it is why stopping a bot cancels its orders rather than
+  leaving them behind.
+- **Saxo polices where an exit may sit.** A take-profit on the wrong side of the market, or too far
+  from it, is rejected. Because an OCO is a single request, a rejected take-profit used to take the
+  stop down with it, so PineconeX now retries the **stop on its own**: a position with a stop and no
+  target is managed, the reverse is not.
+- **Saxo prices snap to the instrument's tick grid**, which is banded by price level (finer on a
+  cheap instrument than an expensive one). Your level is rounded to the nearest valid tick before it
+  is sent, so the resting order can sit a tick away from the number in your script.
+- **A rejection can arrive as `200 OK`.** Bitstamp and Tradovate both report refusals inside a
+  success response. PineconeX reads the body rather than the status code and surfaces the venue's own
+  error in your job log.
+- **`strategy.cancel` and `strategy.cancel_all` are not sent to the broker yet.** Every venue offers
+  the call; the bot does not make it, so a strategy that rests a limit and retracts it later behaves
+  differently live than in the backtest, where the cancel happens. Live, the order stays until it
+  fills or the venue expires it. Avoid designs that queue and retract orders until this ships.
+  (The bot does cancel its own resting exits when it closes a position, when it trails a stop, and
+  when it shuts down. It is the explicit call from your script that is missing.)
+- **Time in force is per venue.** Alpaca equity orders are day orders and die at the close; Alpaca
+  crypto and every futures bracket leg are good-til-cancelled.
 
 ### Execution routing
 
