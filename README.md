@@ -35,6 +35,12 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
 - [Tick data vs. bar data](#tick-data-vs-bar-data)
   - [Enabling it](#enabling-it)
   - [The tape.* namespace](#the-tape-namespace)
+- [Sentiment and attention](#sentiment-and-attention)
+  - [Attention is not sentiment](#attention-is-not-sentiment)
+  - [The two sources](#the-two-sources)
+  - [Reading it in a strategy](#reading-it-in-a-strategy)
+  - [Turning a count into a threshold](#turning-a-count-into-a-threshold)
+  - [Four things to know before you trust a result](#four-things-to-know-before-you-trust-a-result)
 - [Market Data](#market-data)
   - [What a bar contains (OHLCV)](#what-a-bar-contains-ohlcv)
   - [Buying and selling volume (volume delta)](#buying-and-selling-volume-volume-delta)
@@ -1835,6 +1841,121 @@ Three related limits worth knowing:
 ### Data retention
 
 Fetched market data is cached so repeat jobs run instantly without re-downloading. A dataset that hasn't been used by any job for an extended period is automatically removed from the catalog to save storage. Nothing is lost permanently: the next backtest, sweep, or validation run that needs it simply re-fetches it from the source, and any dataset that is still in regular use is never evicted.
+
+---
+
+## Sentiment and attention
+
+The catalog carries two **attention** series alongside price data: how many people looked a company
+up on Wikipedia, and how often it was posted about on Reddit. Both are ordinary datasets fetched
+from the Data page and read from a strategy with `request.security`, so nothing new has to be wired
+up to use them.
+
+### Attention is not sentiment
+
+This is the distinction that decides what you can build. **Attention is unsigned.** A pageview count
+says that ten thousand people looked ASML up; it does not say whether they liked what they found. A
+crash and a record high both produce a spike, and the series cannot tell you which one happened.
+
+So the direction has to come from somewhere else in your strategy. Attention works as a **gate** (only
+act when the crowd is paying unusual notice) or as a **filter** (stand aside when it is not), never as
+the entry signal on its own.
+
+There is deliberately **no signed sentiment series**. Scoring the text of public posts sounds like the
+obvious next step and it is the reason the feature stops here: a polarity score over a forum is
+trivially poisoned by coordinated posting, because a bot writing "bullish" is recorded as conviction
+no human holds. A **count** does not have that weakness. If a ticker is flooded, discussion volume
+genuinely did spike, and that is a fact worth measuring whoever caused it. Counting is also
+reproducible: re-fetch the same range next year and you get the same numbers, which a language model
+or a sentiment lexicon cannot promise.
+
+### The two sources
+
+| Source | What it counts | History | Covers |
+|--------|----------------|---------|--------|
+| **Wikipedia** | Daily pageviews of the company's article, excluding bots and crawlers | 2015-07-01 onward | Anything with an article, worldwide |
+| **Reddit** | Daily posts mentioning the ticker across r/wallstreetbets, r/stocks and r/investing | 2005 onward | US retail names |
+
+Both are daily only. Neither has an intraday equivalent.
+
+### Fetching it
+
+Data page, pick the attention symbol, choose the source, Fetch. It behaves exactly like a price
+dataset: it merges into whatever is already stored rather than replacing it, so a narrow top-up
+extends the series instead of truncating it.
+
+A symbol only offers the source if it has been mapped, because neither identifier can be derived from
+the ticker. Wikipedia needs an article title (`GME` is `GameStop`, `ASML` is `ASML Holding`) and Reddit
+needs a search term, which for tickers that are also ordinary English words (`A`, `IT`, `ON`, `ALL`,
+`NOW`, `PLAY`) has to be the cashtag form or the series fills with unrelated posts.
+
+### Reading it in a strategy
+
+Attention series have their **own symbols**, prefixed by the publisher:
+
+```pine
+wiki = request.security("WIKI:ASML",   "1D", close)   // daily pageviews
+rdt  = request.security("REDDIT:GME",  "1D", close)   // daily post count
+```
+
+The prefix names **who published the number**, not what it measures, and that is deliberate. A single
+`ATTENTION:` namespace could not say whether a value came from Wikipedia or Reddit, and those are not
+interchangeable measurements of the same thing: research comparing search-based and Wikipedia-based
+attention finds they carry different information, and that they diverge most in exactly the stressed
+markets where you would be relying on them. One prefix, one publisher, one dataset.
+
+> A prefixed symbol never falls back to the bare ticker. Writing `WIKI:ABN` when no such symbol
+> exists is an error, not a quiet substitution of ABN's price series. That fallback exists for
+> exchange prefixes (`NASDAQ:NVDA` finding `NVDA`) and would be actively dangerous here, since the
+> backtest would run, report perfectly plausible numbers, and be measuring the wrong quantity.
+
+### Turning a count into a threshold
+
+The stored value is a **raw count**, and on its own it is not comparable to anything. A large company's
+article draws an order of magnitude more traffic than a mid-cap's, so no fixed number is a threshold
+for more than one symbol. What is comparable is how far today sits from the **same** series' own recent
+baseline:
+
+```pine
+att = request.security("WIKI:ASML", "1D", close)
+
+la = math.log(math.max(att, 1))     // counts are lognormal
+mu = ta.sma(la, 60)
+sd = ta.stdev(la, 60)
+z  = sd > 0 ? (la - mu) / sd : 0.0  // this is the number you threshold on
+
+spike = z > 3.0
+```
+
+The logarithm matters. Attention spikes run many multiples of the median, so on raw counts the spike
+dominates its own standard deviation and the z-score flattens toward a constant just when you need it
+to be large.
+
+The **Attention spike** template in the strategy picker is this wired to a minimal rule, with the gate,
+its inverse and no filter at all as three selectable arms, so you can measure what attention adds
+rather than assume it.
+
+### Four things to know before you trust a result
+
+**Bars are shifted to the day you could act on them.** A day's count is only published once the day is
+over, so it is stamped on the following session. You do not need to write `[1]` to avoid look-ahead;
+it has already been done.
+
+**Weekends are invisible.** Both series have a value for every calendar day, but markets do not.
+After the shift, Friday's and Saturday's counts land on days with no trading bar and are never read,
+so Monday sees Sunday's figure alone. Roughly 28% of the calendar does not reach a strategy, and
+weekend interest is exactly when retail attention builds.
+
+**Zero is a real reading, not a gap.** Most tickers draw no posts on most days, and the series records
+that honestly. A quiet stretch is genuine silence, not missing data.
+
+**These are US retail measures.** This is the biggest limitation and it is not a rounding error.
+Measured on this catalog: ASML drew 128 Reddit posts across a full year, with a busiest day of six,
+and its Wikipedia article averages under 200 views a day, which is below the level at which daily
+variation means anything. A European industrial with a flat attention series is not being ignored by
+the market; it is not being measured by these sources. Treat a quiet series for a non-US listing as
+absent data, and prefer price and fundamentals for those names.
+
 
 ---
 
