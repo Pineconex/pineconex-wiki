@@ -36,10 +36,18 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
   - [The tape.* namespace](#the-tape-namespace)
 - [Market Data](#market-data)
   - [What a bar contains (OHLCV)](#what-a-bar-contains-ohlcv)
+  - [Buying and selling volume (volume delta)](#buying-and-selling-volume-volume-delta)
   - [Price structure — what the market did before your strategy](#price-structure--what-the-market-did-before-your-strategy)
   - [Supported sources](#supported-sources)
   - [Data quality: what is checked when data is fetched](#data-quality-what-is-checked-when-data-is-fetched)
   - [Reading another symbol (request.security)](#reading-another-symbol-requestsecurity-do-not-mix-vendors)
+- [Futures](#futures)
+  - [What a futures bar carries beyond OHLCV](#what-a-futures-bar-carries-beyond-ohlcv)
+  - [Open interest](#open-interest)
+  - [Volume delta on futures](#volume-delta-on-futures)
+  - [Volume profile on futures](#volume-profile-on-futures)
+  - [Contract rollover](#contract-rollover)
+  - [Two things to know before you trust a result](#two-things-to-know-before-you-trust-a-result)
 - [Brokers](#brokers)
 - [Plans](#plans)
 
@@ -1541,6 +1549,46 @@ You are not limited to those: any arithmetic on the raw fields is a valid series
 
 > **Volume is not universal.** Equity and crypto sources carry real traded volume, but **FX bars do not** — Saxo returns bid/ask quotes for FX with no trade field, so volume arrives as `0`. A strategy that filters on volume will therefore never trigger on an FX symbol. Check the series before you depend on it. When a daily dataset is resampled to weekly or monthly, volume is **summed** across the period while OHLC is taken as first/max/min/last, which is the correct aggregation.
 
+### Buying and selling volume (volume delta)
+
+A bar carries one volume figure, and it says nothing about direction: 10,000 shares traded tells you
+how busy the bar was, not whether buyers or sellers were in control. **Volume delta** splits that
+figure into the two sides and reports the difference.
+
+```pine
+[up, down, delta] = ta.requestUpAndDownVolume("5")   // both positive, delta = up - down
+d                 = ta.requestVolumeDelta("5")       // just the difference
+```
+
+The argument is a **lower timeframe**. Neither function reads a hidden field on the bar, because no
+such field exists: they look at the smaller bars inside the current one and ask which way each went.
+On a 60m chart, `"5"` splits every hour into twelve five-minute pieces and adds each piece's volume
+to the up side or the down side according to that piece's own direction. The finer you go, the closer
+the answer gets to what actually happened, and the more data the run needs.
+
+Three rules decide what the number means:
+
+| Situation | Result |
+|-----------|--------|
+| No lower-timeframe series available for the run | `na`, never `0` |
+| An intraday bar closes above its open | its **whole** volume counts as buying |
+| An intraday bar closes exactly at its open | counts for **neither** side |
+
+> **`na` and `0` are different answers, and the difference matters.** A delta of `0` means buying and
+> selling matched. `na` means the question could not be answered here at all. If these read `na`, the
+> run has no intraday series to derive from, which is normal on daily-only data. A strategy that
+> quietly treats the missing case as zero will look like a flat market instead of an unanswerable one.
+
+> **This is an approximation, and a good one only at fine resolution.** A real exchange classifies
+> every individual trade by whether it hit the bid or lifted the offer. This attributes a whole
+> intraday bar to one side by that bar's direction, so a five-minute bar that closed one tick up
+> counts entirely as buying even though sellers traded inside it. Use the smallest lower timeframe
+> your data supports, and do not read the output as order-flow truth.
+
+On TradingView the same two functions come from an imported library rather than being built in, so a
+script shared there needs its `import` line added. Everything else about the call is identical,
+including the `[upVolume, downVolume, delta]` shape.
+
 ### Price structure — what the market did before your strategy
 
 The **Data** page has two tabs. **Datasets** is about acquiring data; **Structure** is about
@@ -1603,7 +1651,7 @@ finding. *Scalping* needs live spread and depth data and is not computed yet.
 | Source | Coverage | Notes |
 |--------|----------|-------|
 | **Yahoo** | Equities + crypto | The default. No account needed. **Will not serve any intraday range older than 730 days** — for older intraday bars, use Bitstamp (crypto) or Saxo (equities). |
-| **Saxo Bank** | European equities (DAX, CAC40, AEX, BEL20) + US equities | Requires a connected Saxo account. Saxo carries no crypto. |
+| **Saxo Bank** | European equities (DAX, CAC40, AEX, BEL20) + US equities + European index and bond futures | Requires a connected Saxo account. Saxo carries no crypto. The only source here that serves [futures](#futures) and [open interest](#open-interest). |
 | **Alpaca** | US equities + US-dollar crypto pairs | Requires a connected Alpaca account. Crypto history **begins 2021-01-01**. |
 | **Bitstamp** | Crypto — USD and EUR spot pairs, plus a few FX pairs | **No account or API key needed** — it is a public feed. Timeframes `1m`, `5m`, `15m`, `30m`, `60m`, `1D`. |
 | **Massive** | Broad market data via the Massive API | — |
@@ -1660,6 +1708,154 @@ Fetched market data is cached so repeat jobs run instantly without re-downloadin
 
 ---
 
+## Futures
+
+The catalog carries **21 European index and bond futures** from Saxo, grouped by the currency they
+settle in: *Futures (EUR)*, *Futures (CHF)* and *Futures (USD)*. Alongside them sit the CME contracts
+used for prop-firm trading.
+
+| Group | Contracts |
+|-------|-----------|
+| Equity index | DAX (full, Mini, Micro), CAC 40 and its Mini, EURO STOXX 50 and Micro EURO STOXX 50, STOXX Europe 50 and 600, TecDAX, ATX, SMI, MSCI World |
+| Rates | Euro-Schatz, Euro-BOBL, Euro-Bund, Euro-BUXL, Euro-BTP, Euro-BONO, Swiss government bond |
+| Other | CAC 40 Dividend |
+
+Depth varies by contract. **Bund and BOBL reach back to 1992** and the DAX to 2000, while the Micro
+contracts only begin in 2021. Every contract stores its **tick size** and its **point value**, the
+cash a one-point move is worth, so sizing and reported profit come out in real money rather than in
+index points. A full DAX future is EUR 25 per point against the Micro's EUR 1, which is the entire
+difference between them.
+
+### What a futures bar carries beyond OHLCV
+
+An equity bar gives you five numbers and that is all there is. A futures contract has more to say
+about itself, and three extra readings are available here:
+
+| Reading | What it tells you | Where it comes from |
+|---------|-------------------|---------------------|
+| **Open interest** | How many contracts are still held open when the bar closes | A companion series, stored per contract |
+| **Volume delta** | Whether the volume in the bar was buying or selling | Derived from a lower timeframe |
+| **Volume profile** | Which prices inside the bar actually traded, and where the volume clustered | Computed from the bars themselves |
+
+The three answer different questions and are strongest together: open interest says whether
+positions are being built or unwound, volume delta says which side was pushing, and the volume
+profile says at which prices it happened.
+
+### Open interest
+
+**Open interest** is the number of contracts currently held open. Volume says how much changed hands
+during the bar; open interest says how much is still on the table when it closes. Rising price with
+rising open interest means new money is coming in. Rising price with falling open interest means
+existing positions are being closed, which is a weaker move, and it is the classic tell for a rally
+that is really a short squeeze.
+
+Every futures contract in the catalog has a companion open-interest series. Read it the way you read
+any other symbol:
+
+```pine
+oi = request.security("EUREX:FDAX1!_OI", timeframe.period, close)
+```
+
+The name is the contract's TradingView symbol with `_OI` appended, which is TradingView's own
+convention, so the same line works on both platforms. The series carries one value per bar in
+`close` and reaches as far back as the contract's price history: the Bund's open interest starts in
+**1992**.
+
+> **A zero is the vendor's zero, and it usually means "not published".** Saxo does not report open
+> interest on every bar, and where it does not, the value arrives as `0` rather than as a gap. On a
+> liquid contract that is plainly not a real reading: the Bund is missing about 4% of its bars,
+> scattered as single days. Two contracts are missing whole eras instead, because Saxo published
+> nothing for them at the time. **Micro DAX** has no open interest before 2024 (45% of its history)
+> and the **CAC 40 Dividend** future is 32% zeros. Filter zeros out or forward-fill them, and check
+> the coverage of your own date range first. A rule like "open interest collapsed" will otherwise
+> fire on missing data.
+
+### Volume delta on futures
+
+[Volume delta](#buying-and-selling-volume-volume-delta) works on any instrument with intraday data,
+and futures are where it earns its keep: a contract trades on one venue with one order book, so the
+split between buying and selling is a cleaner reading than it is for a stock quoted in several
+places at once.
+
+```pine
+[up, down, delta] = ta.requestUpAndDownVolume("5")
+```
+
+Remember what the number is: the platform derives it by classifying each smaller bar inside the
+current one, so it approximates the split rather than reproducing the exchange's own trade-by-trade
+classification. A **prop-firm (Tradovate) live bot** is the exception, because that venue publishes
+a real up and down volume with its bars, but that is a live feed and is not stored for backtests.
+
+### Volume profile on futures
+
+[`vp.*`](#volume-profile-vp) profiles where volume traded across price rather than across time, and
+it is a natural fit for futures: the point of control and the value-area edges are the levels a
+futures desk actually watches, and the single order book behind each contract makes them meaningful.
+
+```pine
+[poc, vah, val] = vp.rolling(20, 24)
+```
+
+Combining the three readings is where this gets interesting. Price leaving the value area on rising
+open interest and a delta pushing the same way is a different event from the same move on falling
+open interest, which is more likely to be positions being closed than a new trend.
+
+### Contract rollover
+
+Every futures contract expires. What trades is a specific month, and a few days before it dies the
+exchange's front month becomes the next one, so a bot launched weeks earlier is holding an
+instrument the market is walking away from.
+
+The bot re-asks the venue which month is front **once an hour**, and warns from **seven days out**,
+escalating on the final day. That part is always on, whatever you choose below, so a bot that is not
+going to roll still tells you before expiry rather than after.
+
+What happens at the switch is your choice, made per bot with **Roll to the next contract at expiry**
+on the launch form:
+
+| Setting | At the switch |
+|---------|---------------|
+| **On** | The bot closes at market in the expiring month and re-opens the same side and size in the new one, then re-reads the cost basis from the broker |
+| **Off** | The bot keeps trading the old month and warns. Close the position and relaunch on the new contract yourself |
+
+> **A roll is two real trades, and your strategy never backtested them.** It pays the spread twice
+> and inherits the price gap between the two contracts. A backtest saw none of that: the batch
+> engines run on a spliced continuous series where the roll is a step in the data, not a pair of
+> fills.
+
+> **Levels your strategy is holding do not survive the switch.** A trailing stop, a breakeven mark
+> or a remembered entry kept in a Pine `var` was computed against the expiring contract's prices,
+> and nothing can restate it: a stop from an entry at 5,120 in the September contract means nothing
+> against a December contract trading at 5,190. The bot prints a warning naming this at every roll.
+> Check the first exit it places afterwards.
+
+> **The price series steps at the roll.** The two contracts trade at different levels, so anything
+> computed over the bot's own history reads that step as a move: an ATR widens, a breakout level
+> from last week refers to a different instrument, a moving average bends. It is the same artefact
+> the spliced backtest history has, arriving live.
+
+Neither setting is the safe one, so choose by which failure you would rather have. Rolling trades on
+a schedule you did not pick, at a discontinuity your strategy cannot see. Not rolling ends with a
+position in a contract that stops quoting and is settled by the venue, leaving the bot describing
+something that no longer exists. If your strategy holds positions for days, roll. If it is intraday
+and flat overnight, turning it off costs nothing, because there is rarely a position to carry.
+
+### Two things to know before you trust a result
+
+> **These rows are for data, not for trading.** A futures contract can only be traded here through a
+> [prop-firm account](#prop-firm-futures-tradovate), and that gateway serves CME products. The
+> European contracts are marked accordingly and a live bot refuses to launch on them, so use them to
+> research, to build a regime filter, or to read one instrument while trading another.
+
+> **A continuous series is spliced, not adjusted.** Every futures contract expires, so the long
+> history you see is successive contracts joined end to end. At each roll the level steps by the
+> difference between the expiring contract and the next one, and nothing smooths it. That step is
+> not a price move, but an optimizer will happily treat it as one, and a breakout strategy is
+> exactly the kind that trades gaps. It is sound data for checking that a strategy runs and for
+> measuring costs; be careful using it to select parameters.
+
+---
+
 ## Brokers
 
 Connect a broker under **Account** or on the **Live** page.
@@ -1709,7 +1905,7 @@ CME futures through a prop-firm account, over the Tradovate gateway. **New — t
 
 > **Your firm's risk rules are invisible to the bot.** The daily loss limit, the trailing drawdown and the flat-by time are enforced on the firm's side: a breach flattens every position and locks the account mid-session, with none of the bot's own orders filling. The bot halts when it notices rather than re-entering, but it cannot prevent it. Futures are leveraged whenever a position is open — see [Margin monitoring](#margin-monitoring).
 
-> **The bot does not roll contracts.** It trades the front month resolved at launch, so stop and relaunch it before expiry. Baskets are single-symbol only on this broker for the same reason.
+> **The bot rolls contracts, if you let it.** It resolves the front month at launch and re-checks hourly; see [Contract rollover](#contract-rollover) for what happens at the switch and when to turn it off. Baskets are single-symbol only on this broker.
 
 ---
 
