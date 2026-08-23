@@ -1706,6 +1706,15 @@ Three rules decide what the number means:
 > counts entirely as buying even though sellers traded inside it. Use the smallest lower timeframe
 > your data supports, and do not read the output as order-flow truth.
 
+> **`up + down` does NOT add up to `volume`, and the shortfall can be large.** Flat intraday bars
+> are counted for neither side, so they are missing from both figures. That is easy to read as a
+> rounding detail and it is not: measured on SPY, a 15m bar carrying 8,171,229 shares had one of
+> its three five-minute pieces close exactly at its open, and that piece alone was **2,959,970
+> shares, 36% of the bar**. So anything dividing by `up + down`, or assuming the two sides
+> reconstruct the bar, is working with a number that silently shrinks on exactly the bars where
+> price went nowhere. Divide by `volume` when you want a share of the bar, and by `up + down` only
+> when you deliberately mean a share of the *directional* volume.
+
 On TradingView the same two functions come from an imported library rather than being built in, so a
 script shared there needs its `import` line added. Everything else about the call is identical,
 including the `[upVolume, downVolume, delta]` shape.
