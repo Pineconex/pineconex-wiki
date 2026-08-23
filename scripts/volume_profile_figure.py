@@ -99,6 +99,47 @@ def levels(hist, total, w, va: float = DEFAULT_VA):
     }
 
 
+def poc2(hist, w, sep: float = 0.50):
+    """The second point of control: the heaviest hump the profile comes back DOWN between.
+
+    Not the next-heaviest rung. `sep` bounds both the valley (at most `sep` of the smaller hump)
+    and the hump itself (at least `sep` of the larger), over the DENSE rung range.
+    """
+    if w <= 0.0 or len(hist) < 2:
+        return None
+    keys = list(hist.keys())
+    ks = list(range(keys[0], keys[-1] + 1))
+    if len(ks) < 3:
+        return None
+    v = [hist.get(k, 0.0) for k in ks]
+    poc_i = max(range(len(v)), key=lambda i: v[i])
+
+    peaks, i = [], 0
+    while i < len(v):
+        j = i
+        while j + 1 < len(v) and v[j + 1] == v[i]:
+            j += 1
+        if (i == 0 or v[i] > v[i - 1]) and (j + 1 == len(v) or v[j] > v[j + 1]) and v[i] > 0.0:
+            peaks.append((i, j))
+        i = j + 1
+
+    best = None
+    for a_, b_ in peaks:
+        if a_ <= poc_i <= b_:
+            continue
+        if v[a_] < sep * v[poc_i]:
+            continue
+        lo, hi = (b_, poc_i) if b_ < poc_i else (poc_i, a_)
+        if min(v[lo:hi + 1]) > sep * min(v[a_], v[poc_i]):
+            continue
+        if best is None or v[a_] > best[0]:
+            best = (v[a_], a_, b_)
+    if best is None:
+        return None
+    _, a_, b_ = best
+    return ((ks[a_] + ks[b_]) / 2.0 + 0.5) * w, a_, b_
+
+
 def lvn(hist, w, price: float, downward: bool):
     """Nearest low-volume node: a dip the profile comes back UP from, over the DENSE rung range."""
     if w <= 0.0 or len(hist) < 2:
@@ -164,6 +205,7 @@ def main() -> None:
     lv = levels(hist, total, w, args.va)
     poc, vah, val = lv["poc"], lv["vah"], lv["val"]
     px = float(close[-1])
+    second = poc2(hist, w)
     lvn_lo = lvn(hist, w, px, True)
     lvn_hi = lvn(hist, w, px, False)
     va_pos = (px - val) / (vah - val)
@@ -172,6 +214,7 @@ def main() -> None:
     print(f"window {L} bars  bins {args.bins}  va {args.va}  rung width {w}")
     print(f"poc {poc:.2f}  vah {vah:.2f}  val {val:.2f}")
     print(f"lvn_below {lvn_lo}  lvn_above {lvn_hi}")
+    print(f"poc2 {second[0] if second else None}")
     print(f"va_pos {va_pos:.4f}  va_width {va_width:.4f}  close {px:.2f}")
 
     # ── figure ────────────────────────────────────────────────────────────────────
@@ -207,6 +250,8 @@ def main() -> None:
         ax.axhline(vah, color=BLUE, linewidth=1.4, linestyle=(0, (6, 3)), zorder=3)
         ax.axhline(val, color=BLUE, linewidth=1.4, linestyle=(0, (6, 3)), zorder=3)
         ax.axhline(poc, color=ORANGE, linewidth=2.0, zorder=4)
+        if second is not None:
+            ax.axhline(second[0], color=ORANGE, linewidth=1.8, linestyle=(0, (5, 3)), zorder=4)
         for y in (lvn_lo, lvn_hi):
             if y is not None:
                 ax.axhline(y, color=AQUA, linewidth=1.4, linestyle=(0, (2, 2.5)), zorder=3)
@@ -222,6 +267,9 @@ def main() -> None:
     inside = np.array([lv["lo_ix"] <= i <= lv["hi_ix"] for i in range(len(ks))])
     colors = [BLUE if ins else BLUE_MUTE for ins in inside]
     colors[lv["poc_ix"]] = ORANGE
+    if second is not None:
+        for i in range(second[1], second[2] + 1):
+            colors[i] = ORANGE
     axh.barh(ys + w / 2.0, vols, height=w * 0.80, color=colors,
              edgecolor=SURFACE, linewidth=0.6, zorder=2)
 
@@ -254,6 +302,8 @@ def main() -> None:
     level_label(vah, f"vp.vah  {vah:,.2f}", BLUE)
     level_label(poc, f"vp.poc  {poc:,.2f}", ORANGE, "bold")
     level_label(val, f"vp.val  {val:,.2f}", BLUE)
+    if second is not None:
+        level_label(second[0], f"vp.poc2  {second[0]:,.2f}", ORANGE, "bold")
     if lvn_hi is not None:
         level_label(lvn_hi, f"vp.lvn_above  {lvn_hi:,.2f}", AQUA)
     if lvn_lo is not None:
@@ -281,24 +331,6 @@ def main() -> None:
 
     # one rung, named: vp.histogram()[i] is its length, vp.bin_low(i) is its price floor.
     # Annotated low in the profile, where the rungs are short and the panel has room.
-    i_ann = max(0, lv["lo_ix"] - 8)
-    y_ann, v_ann = ys[i_ann], vols[i_ann]
-    # Both callouts sit BELOW the rung and their leaders run parallel — the shorter reach to
-    # the bar tip above the longer one to the rung floor, so they never cross.
-    tx = vols.max() * 0.46
-    axh.annotate(f"vp.histogram(...)[{i_ann}]  =  {v_ann / 1e6:,.2f}M",
-                 xy=(v_ann, y_ann + w / 2), xytext=(tx, y_ann - w * 3.6),
-                 fontsize=11, color=INK_2, ha="left", va="center",
-                 arrowprops=dict(arrowstyle="->", color=INK_3, linewidth=0.9,
-                                 shrinkA=4, shrinkB=3), zorder=8)
-    axh.plot([0, v_ann * 1.10], [y_ann, y_ann], color=INK_3, linewidth=0.9,
-             linestyle=(0, (3, 2)), zorder=7)
-    axh.annotate(f"vp.bin_low(..., {i_ann})  =  {y_ann:,.2f}",
-                 xy=(v_ann * 1.10, y_ann), xytext=(tx, y_ann - w * 7.2),
-                 fontsize=11, color=INK_2, ha="left", va="center",
-                 arrowprops=dict(arrowstyle="->", color=INK_3, linewidth=0.9,
-                                 shrinkA=4, shrinkB=2), zorder=8)
-
     # titles
     fig.text(0.045, 0.955, f"[poc, vah, val] = vp.rolling({L}, {args.bins})",
              fontsize=17, color=INK, weight="bold", family="DejaVu Sans Mono"
@@ -308,13 +340,19 @@ def main() -> None:
              f"{args.symbol} {args.timeframe}: {L} bars binned onto a {w:g}-wide price ladder, "
              f"{int(args.va * 100)}% value area",
              fontsize=12, color=INK_3)
-    fig.text(0.640, 0.912, "volume traded at price  →", fontsize=11, color=INK_3)
+    # The key for the right panel. `histogram` and `bin_low` are named here rather than with a
+    # leader into the panel: they are properties of EVERY rung, so an arrow at one arbitrary bar
+    # says less than a line saying which dimension of the bar each call returns.
+    fig.text(0.640, 0.953, "volume traded at price  →", fontsize=11, color=INK_3)
     for i, (c, lab) in enumerate(((BLUE, "rungs inside the value area"),
                                   (BLUE_MUTE, "rungs outside it"))):
-        yy = 0.862 - i * 0.030
+        yy = 0.905 - i * 0.030
         fig.patches.append(Rectangle((0.640, yy), 0.011, 0.018, transform=fig.transFigure,
                                      facecolor=c, edgecolor="none", zorder=9))
         fig.text(0.657, yy + 0.004, lab, fontsize=10.5, color=INK_3)
+    for i, lab in enumerate(("each bar's length is  vp.histogram(...)[i]",
+                             "each bar's floor is   vp.bin_low(..., i)")):
+        fig.text(0.640, 0.836 - i * 0.030, lab, fontsize=10.5, color=INK_3)
     axp.set_ylabel("price", fontsize=11.5, color=INK_3, labelpad=6)
 
     fig.savefig(args.out, facecolor=SURFACE, bbox_inches="tight", pad_inches=0.22)

@@ -1022,11 +1022,13 @@ counts once, and the highest high and lowest low are decided by **two** bars. Th
 **volume**-weighted, so a week of heavy accumulation outweighs a month of quiet drift, and a spike
 low that nobody traded at moves it not at all.
 
-![A volume profile of 400 bars of SPY 15m: the price panel on the left with the point of control, the value area and the low-volume nodes drawn across it, and the volume-at-price histogram on the right](images/volume-profile.png)
+![A bimodal volume profile of 250 bars of QQQ 60m: the price panel on the left with both points of control, the value area and the low-volume nodes drawn across it, and the volume-at-price histogram on the right showing two humps](images/volume-profile.png)
 
 Every reading the namespace offers is on that figure, and every number on it is the one `vp.*`
 returns for that window. The histogram on the right is the profile itself, one bar per rung of the
-price ladder; the levels drawn across both panels are what the calls below hand back.
+price ladder; the levels drawn across both panels are what the calls below hand back. This
+particular window is **bimodal**, which is why it is the one drawn: the market traded around two
+prices rather than one, so there is a `vp.poc2` to show as well as a `vp.poc`.
 
 
 ### Reading it in Pine
@@ -1060,6 +1062,7 @@ All three return `[poc, vah, val]`. Then the readings off a rolling profile:
 | call | returns |
 |---|---|
 | `vp.poc(length, bins)` | the point of control on its own |
+| `vp.poc2(length, bins, sep)` | the second point of control, or `na` when the profile has only one mode |
 | `vp.vah(length, bins, va)` / `vp.val(length, bins, va)` | the value area edges on their own |
 | `vp.va_pos(length, bins, va)` | where the close sits inside the value area: 0 at the low edge, 1 at the high |
 | `vp.va_width(length, bins, va)` | the value area's width as a percent of the POC |
@@ -1108,6 +1111,38 @@ always thins out toward its edges, so "thinnest" would nearly always answer with
 true, and useless. Where there is no gap on that side of price, the call returns `na`, which is an
 ordinary outcome to guard rather than an error.
 
+### The second point of control
+
+A market does not always agree on one price. It can spend a window trading around two, moving
+quickly between them, and a profile of that shape has two humps rather than one. `vp.poc` is a
+single argmax, so it names the larger and says nothing about the other. `vp.poc2` names the other.
+
+```pine
+poc = vp.poc(500, 50)
+second = vp.poc2(500, 50)
+if not na(second)
+    // the market has two acceptance zones, and the void between them is the node
+    mid = vp.lvn_below(500, 50)
+```
+
+**It is not "the next-heaviest rung", and that distinction is the whole feature.** The rung beside
+the point of control is heavy for exactly the reason the point of control is, so any
+second-highest reading answers with the POC's own neighbour: a number that is always available,
+always plausible, and never means anything. A second peak is a second *mode* only if the profile
+comes back down between the two.
+
+`sep` is that test, and it is a ratio rather than a volume so it does not move with the instrument
+or the window length. It says two things at once, which at the default both read as "half":
+
+- the valley between the peaks must give back at least `1 - sep` of the smaller hump, and
+- that hump must be worth at least `sep` of the larger one.
+
+The second half is what keeps the answer out of the profile's own tail, where a one-rung wiggle
+clears any valley test trivially because everything around it is near zero. Lower `sep` to demand
+a deeper, more convincing void; raise it to accept a softer separation. `na` is the ordinary
+answer on a single-mode profile, not an error, and a strategy guards it exactly as it guards
+`vp.lvn_below`.
+
 ### Profiling the lower timeframe
 
 Binning a chart bar spreads its volume across the whole range that bar covered, which is a guess:
@@ -1139,7 +1174,8 @@ indistinguishable from warmup.
 - **It needs no extra data.** Unlike [`gex.*`](#gamma-exposure-gex), which needs a live options
   chain, a volume profile is computed from bars the job already has. So it behaves identically in a
   backtest, a sweep and a live bot, on every broker.
-- **Pin the runtime.** `vp.*` needs `//@runtime=2026.08.14-vp` or later.
+- **Pin the runtime.** `vp.*` needs `//@runtime=2026.08.14-vp` or later, and `vp.poc2` needs
+  `//@runtime=2026.08.23-poc2` or later.
 
 ### As a machine-learning feature
 
