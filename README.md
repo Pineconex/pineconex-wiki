@@ -1022,6 +1022,13 @@ counts once, and the highest high and lowest low are decided by **two** bars. Th
 **volume**-weighted, so a week of heavy accumulation outweighs a month of quiet drift, and a spike
 low that nobody traded at moves it not at all.
 
+![A volume profile of 400 bars of SPY 15m: the price panel on the left with the point of control, the value area and the low-volume nodes drawn across it, and the volume-at-price histogram on the right](images/volume-profile.png)
+
+Every reading the namespace offers is on that figure, and every number on it is the one `vp.*`
+returns for that window. The histogram on the right is the profile itself, one bar per rung of the
+price ladder; the levels drawn across both panels are what the calls below hand back.
+
+
 ### Reading it in Pine
 
 ```pine
