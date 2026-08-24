@@ -37,8 +37,9 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
   - [The tape.* namespace](#the-tape-namespace)
 - [Sentiment and attention](#sentiment-and-attention)
   - [Attention is not sentiment](#attention-is-not-sentiment)
-  - [The two sources](#the-two-sources)
+  - [The three sources](#the-three-sources)
   - [Reading it in a strategy](#reading-it-in-a-strategy)
+    - [The fields](#the-fields)
   - [Turning a count into a threshold](#turning-a-count-into-a-threshold)
   - [Four things to know before you trust a result](#four-things-to-know-before-you-trust-a-result)
 - [Market Data](#market-data)
@@ -1846,10 +1847,11 @@ Fetched market data is cached so repeat jobs run instantly without re-downloadin
 
 ## Sentiment and attention
 
-The catalog carries two **attention** series alongside price data: how many people looked a company
-up on Wikipedia, and how often it was posted about on Reddit. Both are ordinary datasets fetched
-from the Data page and read from a strategy with `request.security`, so nothing new has to be wired
-up to use them.
+The catalog carries three non-price series alongside market data. Two measure **attention**, which is
+how many people looked a company up on Wikipedia and how often it was posted about on Reddit. The
+third measures **disclosure**, which is what company officers did with their own money and were
+legally required to report. All three are ordinary datasets fetched from the Data page and read from
+a strategy with `request.security`, so nothing new has to be wired up to use them.
 
 ### Attention is not sentiment
 
@@ -1869,14 +1871,21 @@ genuinely did spike, and that is a fact worth measuring whoever caused it. Count
 reproducible: re-fetch the same range next year and you get the same numbers, which a language model
 or a sentiment lexicon cannot promise.
 
-### The two sources
+### The three sources
 
-| Source | What it counts | History | Covers |
-|--------|----------------|---------|--------|
-| **Wikipedia** | Daily pageviews of the company's article, excluding bots and crawlers | 2015-07-01 onward | Anything with an article, worldwide |
-| **Reddit** | Daily posts mentioning the ticker across r/wallstreetbets, r/stocks and r/investing | 2005 onward | US retail names |
+| Symbol | What it measures | History | Covers |
+|--------|------------------|---------|--------|
+| `WIKI:` | Pageviews of the company's article, excluding bots | 2015-07-01 onward | Anything with an article, worldwide |
+| `REDDIT:` | Posts mentioning the ticker across r/wallstreetbets, r/stocks and r/investing | 2005 onward | US retail names |
+| `SECFORM4:` | Insider open-market purchases and sales, in dollars | 2003 onward | US-registered issuers only |
 
-Both are daily only. Neither has an intraday equivalent.
+All three are daily only. None has an intraday equivalent.
+
+`SECFORM4:` covers **US-registered issuers only**, and that is a hard limit rather than a gap in our
+mapping. A foreign private issuer files a 20-F and is exempt from Section 16 entirely, so it never
+files a Form 4 at any date. ASML returns zero against Microsoft's 727. The European equivalent
+(managers' transactions under MAR Article 19) lives in a separate register per country and is not
+carried here.
 
 ### Fetching it
 
@@ -1891,11 +1900,12 @@ needs a search term, which for tickers that are also ordinary English words (`A`
 
 ### Reading it in a strategy
 
-Attention series have their **own symbols**, prefixed by the publisher:
+Derived series have their **own symbols**, prefixed by the publisher, and their own **field names**:
 
 ```pine
-wiki = request.security("WIKI:ASML",   "1D", close)   // daily pageviews
-rdt  = request.security("REDDIT:GME",  "1D", close)   // daily post count
+views  = request.security("WIKI:ASML",     "1D", pageviews)
+posts  = request.security("REDDIT:GME",    "1D", mentionCount)
+flow   = request.security("SECFORM4:MSFT", "1D", insiderFlowUsd)
 ```
 
 The prefix names **who published the number**, not what it measures, and that is deliberate. A single
@@ -1904,10 +1914,71 @@ interchangeable measurements of the same thing: research comparing search-based 
 attention finds they carry different information, and that they diverge most in exactly the stressed
 markets where you would be relying on them. One prefix, one publisher, one dataset.
 
+#### The fields
+
+Every dataset on the platform is stored as five columns, because that is what a bar is. A derived
+series has no prices to put in them, so each column carries a different figure and each has a name
+that says what it holds. **You never write `open` or `close` on these symbols.**
+
+| Column | `WIKI:` | `REDDIT:` | `SECFORM4:` |
+|--------|---------|-----------|-------------|
+| 1 | `pageviews` | `mentionCount` | `insiderFlowUsd` |
+| 2 | `mobileViews` | `mentionScore` | `transactionShares` |
+| 3 | `desktopViews` | `mentionComments` | `transactionPricePerShare` |
+| 4 | `spiderViews` | `topAuthorPosts` | `insiderSharesHeld` |
+| 5 | `pageEdits` | `distinctAuthors` | `transactionCount` |
+
+**Wikipedia.** `pageviews` is human traffic (crawlers are excluded at the source). The split into
+`mobileViews` and `desktopViews` is a rough proxy for who is looking, since retail skews mobile.
+`spiderViews` is crawler traffic, which follows **media** attention rather than reader attention, so
+it is additional information and not contamination. `pageEdits` counts changes to the article, which
+is a far stronger signal than passive reading: somebody cared enough to rewrite it. It is also rare,
+so expect long runs of zero.
+
+**Reddit.** `mentionCount` is posts per day, but the author fields are the reason to use this series
+at all. A post count cannot separate coordinated posting from genuine interest, which is the standing
+objection to using forum data for anything. Counting **who** posted can. Measured on
+r/wallstreetbets for GME on 27 January 2021: 100 posts came from 67 distinct authors, and the single
+busiest account wrote 32 of them.
+
+```pine
+posts   = request.security("REDDIT:GME", "1D", mentionCount)
+authors = request.security("REDDIT:GME", "1D", distinctAuthors)
+topper  = request.security("REDDIT:GME", "1D", topAuthorPosts)
+
+breadth       = authors / posts          // 1.0 = everyone posted once
+concentration = topper / posts           // high = one account is doing the talking
+```
+
+Both are stored as raw counts so the ratio is yours to define, the same way the series stores raw
+pageviews rather than a z-score.
+
+**SEC Form 4.** `insiderFlowUsd` is a **cumulative** signed dollar total: it only moves on filing
+days and never resets, so the information is in the difference between two points rather than the
+level.
+
+```pine
+flow = request.security("SECFORM4:MSFT", "1D", insiderFlowUsd)
+net90 = flow - flow[90]      // net dollars filed over the window
+```
+
+The other four describe the day itself. `insiderSharesHeld` is what the filers still own afterwards,
+which is what lets you ask how large a sale was **relative to the stake** rather than in absolute
+dollars: a 4 million dollar sale means something different from someone with 10 million and someone
+with 400 million.
+
+> Only open-market transactions are counted, which for a Form 4 means codes `P` and `S`. Most of what
+> a Form 4 reports is compensation mechanics with no decision in it: a grant, an option exercise, or
+> shares withheld to pay the tax on a vesting. Measured over 15 consecutive Microsoft filings, four
+> of six transactions were not trades at all. Counting those is what produces the "insiders are
+> dumping" headline every time a grant vests.
+
 > A prefixed symbol never falls back to the bare ticker. Writing `WIKI:ABN` when no such symbol
 > exists is an error, not a quiet substitution of ABN's price series. That fallback exists for
 > exchange prefixes (`NASDAQ:NVDA` finding `NVDA`) and would be actively dangerous here, since the
-> backtest would run, report perfectly plausible numbers, and be measuring the wrong quantity.
+> backtest would run, report perfectly plausible numbers, and be measuring the wrong quantity. The
+> field names are guarded the same way: `pageviews` read from a price symbol is refused rather than
+> quietly returning that stock's close.
 
 ### Turning a count into a threshold
 
