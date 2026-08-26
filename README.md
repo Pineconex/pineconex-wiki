@@ -1,10 +1,10 @@
 # PineconeX Documentation
 
-> **Version:** v0.2.0-alpha
+> **Version:** v0.2.1-alpha
 
 PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6** strategies against real market data. Write your strategy once, then backtest it, sweep its parameters, validate that the edge is real, and deploy it live against a connected broker, all from the same interface.
 
-**Equities and crypto.** Alongside European and US stocks, PineconeX trades **crypto**: USD and EUR spot pairs on **Bitstamp**, and the US-dollar pairs on **Alpaca**. Crypto markets never close, and the venues' order models differ from an equity broker's in ways that change how a stop-loss behaves, so [read this before deploying a crypto bot](#crypto).
+**Equities and crypto.** Alongside European and US stocks, PineconeX trades **crypto**: USD and EUR spot pairs on **Bitstamp**, the US-dollar pairs on **Alpaca**, and the USDT pairs on **Binance**. Crypto markets never close, and the venues' order models differ from an equity broker's in ways that change how a stop-loss behaves, so [read this before deploying a crypto bot](#crypto).
 
 ---
 
@@ -1376,18 +1376,18 @@ The **PineconeX** column is what the platform sends, and how you ask for it in P
 columns are what happens to it once it arrives. A gap in the first column is ours; a gap in a venue
 column is the venue's, and no amount of platform work will close it.
 
-| | PineconeX | Saxo (stocks, futures) | Alpaca equities | Alpaca crypto | Bitstamp spot | Prop futures (Tradovate) |
-|---|---|---|---|---|---|---|
-| Market entry and close | `strategy.entry` / `strategy.close` | Yes | Yes | Yes | Yes | Yes |
-| Limit entry | `strategy.entry(limit=)` | Yes | Yes | Yes | Yes | Yes |
-| Stop entry | `strategy.entry(stop=)` | Yes (`StopIfTraded`) | Yes | Sent as stop-limit | **No** | Yes |
-| Resting stop-loss | `strategy.exit(stop=)` | Yes | Yes | Yes (the one resting slot) | **No** | Yes (bracket) |
-| Resting take-profit | `strategy.exit(limit=)` | Yes | Yes | Bot-managed | Bot-managed | Yes (bracket) |
-| Stop and target linked by the venue | Sent as one OCO where it exists | Yes | Yes | **No** | **No** | Yes (bracket on the entry) |
-| Trailing a stop | Re-sent whenever your script moves the level | Amended in place | Cancel and replace | Bot-managed | Bot-managed | Cancel and replace |
-| Cancel a resting order from your script | `strategy.cancel` / `strategy.cancel_all`, resting entries only | Yes | Yes | Yes | Yes | Yes |
-| Shorting | `strategy.entry(direction=strategy.short)` | No on stocks, yes on futures | Yes, if your account allows it | No | No | Yes |
-| Order quantity | Sized by your strategy, rounded to the venue's unit | Whole units | Whole units | Fractional | Fractional | Whole contracts |
+| | PineconeX | Saxo (stocks, futures) | Alpaca equities | Alpaca crypto | Bitstamp spot | Binance spot | Prop futures (Tradovate) |
+|---|---|---|---|---|---|---|---|
+| Market entry and close | `strategy.entry` / `strategy.close` | Yes | Yes | Yes | Yes | Yes | Yes |
+| Limit entry | `strategy.entry(limit=)` | Yes | Yes | Yes | Yes | Yes | Yes |
+| Stop entry | `strategy.entry(stop=)` | Yes (`StopIfTraded`) | Yes | Sent as stop-limit | **No** | Sent as stop-limit | Yes |
+| Resting stop-loss | `strategy.exit(stop=)` | Yes | Yes | Yes (the one resting slot) | **No** | Yes (the one resting slot) | Yes (bracket) |
+| Resting take-profit | `strategy.exit(limit=)` | Yes | Yes | Bot-managed | Bot-managed | Bot-managed | Yes (bracket) |
+| Stop and target linked by the venue | Sent as one OCO where it exists | Yes | Yes | **No** | **No** | **No** | Yes (bracket on the entry) |
+| Trailing a stop | Re-sent whenever your script moves the level | Amended in place | Cancel and replace | Bot-managed | Bot-managed | Cancel and replace | Cancel and replace |
+| Cancel a resting order from your script | `strategy.cancel` / `strategy.cancel_all`, resting entries only | Yes | Yes | Yes | Yes | Yes | Yes |
+| Shorting | `strategy.entry(direction=strategy.short)` | No on stocks, yes on futures | Yes, if your account allows it | No | No | No | Yes |
+| Order quantity | Sized by your strategy, rounded to the venue's unit | Whole units | Whole units | Fractional | Fractional | Fractional, on the venue's step | Whole contracts |
 
 "Bot-managed" means the level is real but it lives in the bot, not at the venue: it is checked at
 each bar close, and when it is hit the bot cancels whatever else is resting and closes at market.
@@ -1409,8 +1409,13 @@ trailing order would follow the venue's rule instead of your script's.
 - **Alpaca crypto allows one resting exit per position.** The first resting order reserves the whole
   coin balance, so a second leg is refused. That slot is given to the stop, because it is the
   protection, and the take-profit is bot-managed.
-- **Bitstamp is long-only.** A short entry is refused before it reaches the exchange: there is
-  nothing to borrow on spot.
+- **Binance spot allows one resting exit per position**, for the same reason: a resting sell
+  reserves the base balance. The stop takes the slot and the take-profit is bot-managed. Unlike
+  Bitstamp, the stop it rests is real, so a Binance bot is protected between bars. A pair whose own
+  `orderTypes` do not list `STOP_LOSS_LIMIT` is demoted to the bot-managed stop, and the bot says so
+  at startup rather than assuming.
+- **Bitstamp and Binance are long-only.** A short entry is refused before it reaches the exchange:
+  there is nothing to borrow on spot.
 - **Saxo stock accounts do not short.** A sell with no holding behind it comes back `NotOwned`, even
   on a margin-enabled account. Saxo futures do short.
 - **Alpaca options take limit, stop and stop-limit, but no OCO, bracket or trailing order.** Options
@@ -1479,19 +1484,19 @@ Each bot carries its own settings; leave a field blank to use the runtime defaul
 
 - **One combined heartbeat.** A basket sends a single Telegram overview, a per-symbol table (price, position, live P&L) plus a net summary, rather than one message per symbol.
 - **One position per symbol**, evaluated at the same bar close across the basket.
-- **Saxo, Alpaca and Bitstamp only.** Interactive Brokers and Lightspeed do not fit a shared connection, and a prop-firm futures basket would be a basket of contract months with its own roll for each, so single symbol only there.
+- **Saxo, Alpaca, Bitstamp and Binance only.** Interactive Brokers and Lightspeed do not fit a shared connection, and a prop-firm futures basket would be a basket of contract months with its own roll for each, so single symbol only there.
 
 > Launching one bot per symbol remains the more controllable option: each has its own log, its own position and its own stop button, so you can shut one symbol down without touching the rest.
 
 ### Margin monitoring
 
-A live bot checks the account's margin usage every 5 minutes on every broker that can lend (Saxo, Alpaca and prop-firm futures) and reports it in the log, so a margin call is visible before it acts on you. Bitstamp spot cannot borrow at all, so no margin call is possible there.
+A live bot checks the account's margin usage every 5 minutes on every broker that can lend (Saxo, Alpaca and prop-firm futures) and reports it in the log, so a margin call is visible before it acts on you. Bitstamp and Binance spot cannot borrow at all, so no margin call is possible there.
 
 Margin is consumed by **borrowing**, not by holding: a cash-funded long uses none, and a bot on such an account simply logs *"no leverage in use"*. A blocked or restricted account is reported as such rather than as a healthy 0%. Note this is your broker's limit; the strategy's own cap is [`margin_long` / `margin_short`](#margin-and-leverage-margin_long--margin_short), and the two are enforced independently.
 
 ### Crypto
 
-Crypto trades on **Bitstamp** (USD and EUR spot pairs) and **Alpaca** (US-dollar pairs). Pick the symbol under the **Crypto (USD)** or **Crypto (EUR)** index; the symbol list shows which venues carry it.
+Crypto trades on **Bitstamp** (USD and EUR spot pairs), **Alpaca** (US-dollar pairs) and **Binance** (USDT pairs). Pick the symbol under the **Crypto (USD)** or **Crypto (EUR)** index; the symbol list shows which venues carry it.
 
 Your Pine Script does not change. What the *broker* does underneath changes a great deal, and the single most important difference is **what actually protects your position**:
 
@@ -1499,6 +1504,7 @@ Your Pine Script does not change. What the *broker* does underneath changes a gr
 |-------|-----------|-------------|
 | **Saxo** / **Alpaca equities** | Native, resting at the broker | Native, resting at the broker (OCO: a fill on one cancels the other) |
 | **Alpaca crypto** | Native, resting at the broker | **Managed by the bot**: crypto allows only *one* resting exit, and that slot is given to the stop. The bot checks the target at each bar close and, when hit, cancels the stop and closes at market. |
+| **Binance spot** | Native `STOP_LOSS_LIMIT`, resting at the exchange | **Managed by the bot**: one resting exit only, same as Alpaca crypto and for the same reason. |
 | **Bitstamp** | **Managed by the bot**: Bitstamp spot has **no stop order at all** | Managed by the bot |
 
 > **A Bitstamp stop-loss is not held at the exchange.** Bitstamp's spot market has no stop orders, no take-profits and no OCO, and the API even *accepts* a stop price and answers `200 OK` with an order id, while creating nothing. So PineconeX never claims one: on Bitstamp, your stop is enforced **by the bot, at bar close**. If price gaps straight through your stop level between two bars, the bot exits on the next bar close, at whatever the market is then, not at your stop price. On a 24/7 market that gap is a real risk. Size accordingly, and prefer a shorter timeframe if the stop matters to you.
@@ -1506,9 +1512,10 @@ Your Pine Script does not change. What the *broker* does underneath changes a gr
 Other crypto specifics worth knowing:
 
 - **Crypto never closes.** There is no session, no end-of-day. A bot on a 5m crypto chart runs through the night and the weekend.
-- **Size is fractional.** Unlike equities, crypto orders are not rounded down to whole units: `0.0134` BTC is a valid order.
-- **Fees land in different places.** On Alpaca the fee is taken **in the coin** (order 0.001 BTC, own slightly less); on Bitstamp it is taken **in the cash** (order 0.0002 BTC, receive exactly 0.0002 BTC). The bot sizes its exits from what the broker says you actually hold, so this does not strand dust, but it explains why the filled quantity may not equal the ordered one on Alpaca.
-- **Neither venue allows shorting crypto.** A short entry is refused.
+- **Size is fractional.** Unlike equities, crypto orders are not rounded down to whole units: `0.0134` BTC is a valid order. Binance rounds to the pair's own `stepSize` and refuses anything under its minimum notional, rather than rounding it for you; the bot reads both at startup and prints them.
+- **Fees land in different places.** On Alpaca and Binance the fee is taken **in the coin** (order 0.001 BTC, own slightly less); on Bitstamp it is taken **in the cash** (order 0.0002 BTC, receive exactly 0.0002 BTC). The bot sizes its exits from what the broker says you actually hold, so this does not strand dust, but it explains why the filled quantity may not equal the ordered one on Alpaca and Binance.
+- **None of the three venues allows shorting crypto.** A short entry is refused.
+- **A Binance pair is quoted in USDT, and the rest of the symbol is quoted in USD.** `BTCUSD` carries a Yahoo, a Bitstamp and often an Alpaca id in real dollars, and its Binance leg is `BTCUSDT`. The two track within a few basis points normally and they do **not** during a stablecoin depeg, which is exactly when a crypto strategy is busiest. A backtest on that symbol runs on USD bars while a Binance bot fills in USDT. Position sizing is unaffected: the bot sizes against the account's real USDT balance.
 
 ---
 
@@ -1576,16 +1583,22 @@ on the data source your bot is running:
 | **Alpaca** (crypto) | Yes, real-time | 24/7, so a tick strategy can be observed outside market hours. |
 | **Bitstamp** (crypto) | Yes, real-time | Public feed, no API key needed: live trades **and** the top of the order book, 24/7. |
 | **Saxo Bank** | Yes, but **delayed** | Quote-only and typically ~20 minutes behind without a real-time market-data subscription. **Observe-only**, see below. |
+| **Binance** (crypto) | No | No tick path yet. `calc_on_every_tick` is accepted, warns in the log, and the strategy runs once per bar close. |
+| **Prop futures** (Tradovate) | Yes, in preview | Real trade prints and quotes on the front-month contract. Untested against a live prop-firm account, so treat `tape.*` there as unproven. The feed reports no entitlement of its own, so the bot measures its own delay and will not place an intrabar order on a feed it cannot show is real-time. |
 | **Yahoo**, **Massive**, **Interactive Brokers** | No | No tick path. `calc_on_every_tick` is accepted and simply never fires. |
 
 If a strategy asks for ticks on a source that has none, the bot says so in its log and carries on
 at bar close; it does not fail to start.
 
-> **Alpaca allows one market-data connection per account**, so only **one tick-streaming bot per
-> Alpaca account** can have the tape at a time. A second one is refused the stream (it backs off and
-> keeps retrying, because it is the *other* bot that would have to stop). It still trades normally:
-> orders and bar polling go over REST, so only `tape.*` is affected. Bots that do not set
-> `calc_on_every_tick` never take the connection.
+> **Alpaca allows one market-data connection per account**, and PineconeX now shares it. Your
+> tick-streaming bots on one Alpaca account read a single upstream connection between them, so
+> several can stream at once where previously the second was refused. The connection is opened only
+> when a bot actually needs it and released about a minute after the last one stops, so a bot that
+> does not set `calc_on_every_tick` never takes it. Equities and crypto are separate feeds, so one
+> account can hold both. The sharing is per server: bots for one account are placed on the same
+> server where there is room for them, and a bot that has to be placed elsewhere is refused the
+> stream and falls back to bar close. It still trades normally either way, since orders and bar
+> polling go over REST and only `tape.*` is affected.
 
 ### The `tape.*` namespace
 
@@ -1850,12 +1863,21 @@ finding. *Scalping* needs live spread and depth data and is not computed yet.
 | **Saxo Bank** | European equities (DAX, CAC40, AEX, BEL20) + US equities + European index and bond futures | Requires a connected Saxo account. Saxo carries no crypto. The only source here that serves [futures](#futures) and [open interest](#open-interest). |
 | **Alpaca** | US equities + US-dollar crypto pairs | Requires a connected Alpaca account. Crypto history **begins 2021-01-01**. |
 | **Bitstamp** | Crypto: USD and EUR spot pairs, plus a few FX pairs | **No account or API key needed**, it is a public feed. Timeframes `1m`, `5m`, `15m`, `30m`, `60m`, `1D`. |
+| **Binance** | Crypto: USDT spot pairs and USD-M perpetual futures | **No account or API key needed**, the klines endpoint is public. Timeframes `1m`, `5m`, `15m`, `30m`, `60m`, `1D`, and no 90m. Always reads the production venue, even for an account connected to demo or testnet, because a demo order book is not the market. |
 | **Massive** | Broad market data via the Massive API | — |
 | **Interactive Brokers** | Equities | Requires IBKR (TWS/Gateway) configured. |
 
 The source list offered for a symbol is filtered to the sources that actually carry it; a source that has no ticker for the symbol is not selectable.
 
 > **For deep intraday crypto history, use Bitstamp.** It is the only source that reaches it: Yahoo cuts intraday off at 730 days and Alpaca's crypto data starts in 2021, while Bitstamp's public series goes back to **2011** and quotes real BTC/USD (not a USDT proxy). A multi-year hourly Bitcoin backtest is only reproducible from this source.
+
+#### Perpetual futures are data, not something you can trade here
+
+Crypto **perpetual futures** are in the catalog under **Perpetual Futures (Crypto)**, **(Macro)** and **(Binance)**, and they are fetchable and backtestable but **not live-tradable**. They carry leverage, funding and liquidation, and Pine's cash-equity model knows about none of the three: a perp backtest would show a profit on a strategy the live bot gets liquidated out of, and a bot has no concept of a position vanishing because the *venue* closed it. So the symbol is offered for research and refused at launch.
+
+They are worth having because the perp is where the volume is, and because Bitstamp's macro perps are the only place on the platform where gold, silver, WTI, Brent, EUR/USD, QQQ and EWY quote around the clock against USD.
+
+> **A perpetual and its spot pair are different instruments that share a name.** `BTCUSDT` is both a Binance spot pair and a Binance perpetual, on different hosts with different histories. The `.P` suffix and the "perpetual future" display name exist so nobody backtests one believing it is the other. The tick differs too: Bitstamp quotes BTC spot to 0.01 and its perp to whole dollars.
 
 ### Data quality: what is checked when data is fetched
 
@@ -2275,6 +2297,27 @@ Two things about Bitstamp that do not apply to a stock broker, and that will oth
 
 - **A spot holding is a balance, not a position.** Bitstamp stores no average entry price anywhere, so a bot reconstructs its cost basis from your fill history. A coin that was **deposited** (or bought more than 30 days ago, outside the API's transaction window) has no purchase price the bot can find, so it **refuses to trade that holding** and says so in the log, rather than inventing an entry price and computing wrong P&L, stops and take-profits from it. **Fund a Bitstamp bot's account by buying the coin, not by depositing it.**
 - **Spot is long-only.** A short entry is refused; there is nothing to borrow.
+
+### Binance
+
+Binance is a crypto **exchange** for USDT spot pairs. Like Bitstamp, your coins and cash sit at the exchange and orders go into its own book. Unlike Bitstamp, it can hold a real stop-loss for you.
+
+1. Create an API key with **Enable Spot & Margin Trading** on, and **withdrawals off**.
+2. Click **Connect Binance** and pick **Demo Trading**, **Spot Testnet** or **Live**.
+3. Paste the key and secret. They are verified against Binance before they are stored.
+
+> **Binance has three environments and a key only works at the one that minted it.** **Demo Trading** keys come from your real Binance account at `demo.binance.com`, so there is nothing extra to sign up for, and it gives you demo execution against the live tape, which makes it the closest paper analogue of live trading on any broker here. That is the default. **Spot Testnet** is a wholly separate account system with its own registration, its own keys and a much thinner order book. **Live** is real money.
+
+> **`-2015 Invalid API-key, IP, or permissions for action` almost always means the wrong environment**, not a bad key, because Binance cannot tell the two apart in its answer. PineconeX names the host it tried so you can check it against where you created the key. If they match, check the key's IP restriction.
+
+> **A key that can withdraw is refused.** A trading bot never needs that permission, and the credential is held in plaintext on the server that trades it: trading is a bounded loss, withdrawal is the whole balance. A read-only key is refused at connect too, rather than authenticating cleanly and then rejecting every order.
+
+Four things about Binance worth knowing before you launch a bot on it:
+
+- **A spot holding is a balance, not a position** — exactly as on Bitstamp. Binance stores no average entry price, so the bot reconstructs your cost basis from your fill history and **refuses to trade a holding it cannot price**, such as coins you deposited rather than bought. Fund a Binance bot's account by buying the coin.
+- **It rests one exit, and that exit is the stop.** A resting sell reserves the base balance, so a second leg is refused. The stop goes to the exchange, and the take-profit is checked by the bot at bar close.
+- **The fee is taken in the coin.** Order 0.001 BTC and you own slightly less, so every exit is sized from what the exchange says you hold rather than from what the bot ordered. This is the opposite of Bitstamp, where the fee comes out of the cash.
+- **Pairs are quoted in USDT.** See [Crypto](#crypto) for what that means for a backtest that ran on USD bars.
 
 ### Prop-firm futures (Tradovate)
 
