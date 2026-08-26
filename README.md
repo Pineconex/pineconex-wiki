@@ -1953,7 +1953,7 @@ dataset: it merges into whatever is already stored rather than replacing it, so 
 extends the series instead of truncating it.
 
 A symbol only offers the source if it has been mapped, because neither identifier can be derived from
-the ticker. Wikipedia needs an article title (`GME` is `GameStop`, `ASML` is `ASML Holding`) and Reddit
+the ticker. Wikipedia needs an article title (`GME` is `GameStop`, `AMZN` is `Amazon (company)`) and Reddit
 needs a search term, which for tickers that are also ordinary English words (`A`, `IT`, `ON`, `ALL`,
 `NOW`, `PLAY`) has to be the cashtag form or the series fills with unrelated posts.
 
