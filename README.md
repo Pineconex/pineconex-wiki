@@ -886,10 +886,11 @@ one violent session keeps them elevated for as long as it stays inside that wind
 those dates carries the same value. `msc` can tell you the basket has been crowded for two months;
 only `turb` can tell you today was the break.
 
-> **`vmsc.calculate(group)` is the obsolete spelling of `basket.vmsc(group)`.** Same three values, in
-> the same order, and it is literally the same function under two names, and it still works. It is
-> frozen at three, though: `turb`, `pc1` and `ebets` are reachable only through `basket.*`. Use the
-> new spelling in new scripts; there is no need to rewrite a strategy that works.
+> **An earlier `vmsc.*` namespace has been REMOVED.** If you have a strategy calling
+> `vmsc.calculate(group)`, replace it with `basket.vmsc(group)`: same three values, in the same
+> order, literally the same function. Validation rejects the old spelling and names the line and the
+> replacement, so you will not be left guessing. `turb`, `pc1` and `ebets` were never reachable
+> through the old namespace at all.
 
 **The argument is the universe.** PineconeX reads the array at the call site before the run,
 resolves each ticker, and precomputes the series, so the declaration has to be readable without
@@ -919,6 +920,64 @@ it does not match what was precomputed, so the script and the data can never dri
 identifiers is rejected at launch rather than resolved: the series is computed and cached per
 (universe, window) and injected one value per bar, so a second basket has nowhere to go and would
 silently read the first one's numbers.
+
+### Choosing how the correlations are estimated (`//@basket=`)
+
+By default the readings come from a flat-weighted 60-bar window: every bar in the lookback counts
+the same. That is one choice among several, and a strategy can name a different one with a
+decorator at the top of the file, exactly as `//@runtime=` names an engine:
+
+```pine
+//@basket=ewma
+```
+
+| Mode | What it does | When it is the right one |
+|---|---|---|
+| `roll` | flat-weighted window. **The default** | almost always, and always for a large basket |
+| `ewma` | exponentially weighted, recent bars count more | when you care that the basket *became* crowded recently, rather than that it has been on average |
+| `leadlag` | adds the correlation at one bar's lead and lag | **only** for a basket spanning markets whose sessions do not overlap |
+| `blend` | a correlation matrix per session, blended by time of day | intraday baskets spanning sessions. **Not selectable on a job yet**, see below |
+
+An unrecognised name is refused at validation and the error lists the ones that exist, so a typo
+cannot quietly leave you on the default.
+
+**Every result records the mode that produced it.** This matters more than it sounds: the same
+basket on the same day reads `pc1` 0.258 under `roll` and 0.217 under `ewma`, and `turb` 0.820
+against 0.653. One name, two numbers. Results either side of a change are not comparable, and a
+threshold tuned under one mode does not transfer to another.
+
+**`ewma` has a ceiling no window can raise.** Its effective sample is 32.3 bars whatever the
+lookback, so above about 32 names the basket is larger than the sample the correlations come from
+and the readings compress rather than scale. Prefer `roll` for a big basket unless recency is
+specifically what you are measuring.
+
+**`leadlag` will make most baskets read *worse*, and the number is the point.** It exists for
+non-synchronous trading: when Seoul closes eight hours before New York opens, part of the
+co-movement lands on the next date and a same-day correlation cannot see it. Inside one exchange
+there is nothing to recover, so the extra terms are noise, and it *adds* them. Measured over each
+basket's full history, mean `msc`:
+
+| basket | `roll` | `leadlag` | change |
+|---|---|---|---|
+| 44 US names | 0.1645 | 0.1609 | −2.2% |
+| CAC 40 | 0.1617 | 0.1832 | **+13.3%** |
+| DAX | 0.1585 | 0.1813 | **+14.4%** |
+
+Two European baskets reading 14% more crowded than they are. The mode is not broken. On a
+constructed one-bar lead it takes `msc` from 0.005 to 0.302, recovering essentially all of a
+relationship the default cannot see. It is the right tool pointed at the wrong basket.
+
+It also costs three readings: **`pc1`, `ebets` and `turb` are `na` under `leadlag`**, unavoidably.
+Adjusting each pair separately does not leave a valid correlation matrix, and those three are
+properties of the matrix as a whole. `nz()` them as always, and remember `nz(turb, 1.0)`: a gate
+written as `nz(turb, 1.0) < 1.5` becomes permanently open when turbulence is unavailable. That is
+not hypothetical. The same strategy went from 329 trades to 29 that way, and the 29-trade version
+looked considerably better.
+
+**`blend` is built but not yet reachable from a job.** It needs an intraday series, and the launch
+path still computes the daily one, so pinning it today gets you no readings rather than blended
+ones. It is listed here because the mode exists and is accepted by the validator, not because you
+can use it yet.
 
 ### How the series behaves
 
