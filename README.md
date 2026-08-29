@@ -87,7 +87,7 @@ PineconeX runs standard **Pine Script v6**, so the official TradingView document
 
 For the trading side rather than the language, the **[Learn hub](https://pineconex.com/learn)** collects the books, talks and guides we recommend on systematic trading, backtesting and validation.
 
-> **PineconeX runs Pine headless.** There is no chart, so chart/UI calls (`plot`, `hline`, drawings, tables, …) are accepted but silently ignored, and a few primitives diverge from TradingView (e.g. `alertcondition()` is repurposed for notifications, indexing an indicator call directly returns `na`). The language is the same; the runtime is backtest/live execution rather than a chart. These differences are called out throughout this guide where they matter.
+> **PineconeX runs Pine headless.** There is no chart, so chart/UI calls (`plot`, `hline`, drawings, tables, …) are accepted but silently ignored, and a few primitives diverge from TradingView (e.g. `alertcondition()` is repurposed for notifications). The language is the same; the runtime is backtest/live execution rather than a chart. These differences are called out throughout this guide where they matter.
 
 ### Creating a strategy
 
@@ -272,7 +272,7 @@ Set it explicitly (0–5000) only when the depth can't be known ahead of time, e
 
 > Built-in series (`close[n]`, …) and `ta.*` functions always see full history regardless of this setting; it only bounds *user-variable* lookback.
 
-> **Indexing a past value** behaves as it does on TradingView: `ta.rsi(close, 14)[1]`, `(close > open)[1]`, `math.sum(close, 5)[1]`, `close[1][1]`, `(cond ? a : b)[1]` and `strategy.equity[1]` all work. Four things refuse, each with a clear error rather than a wrong number: a **tuple** (`ta.macd(...)[1]` — destructure it first with `[m, s, h] = ta.macd(...)`, which is how TradingView works too), **`barstate.*` / `session.*`**, a **user-defined function** whose body is just a bool or a number, and **`timeframe.change()`**. Assigning to a variable first and indexing that (`e = ta.ema(close, 20)` then `e[1]`) fixes all four and is never wrong. Engines older than 2026-08-29 index only about half the `ta.*` surface and raise an error for the rest.
+> **Indexing a past value** behaves as it does on TradingView: `ta.rsi(close, 14)[1]`, `(close > open)[1]`, `math.sum(close, 5)[1]`, `close[1][1]`, `(cond ? a : b)[1]`, `strategy.equity[1]` and `ta.obv[1]` all work, and `expr[0]` is always the expression itself. Four things refuse, each with a clear error rather than a wrong number: a **tuple** at a non-zero offset (`ta.macd(...)[1]` — destructure it first with `[m, s, h] = ta.macd(...)`, which is how TradingView works too), **`barstate.*` / `session.*`**, a **user-defined function** whose body is just a bool or a number, and **`timeframe.change()`**. Assigning to a variable first and indexing that (`e = ta.ema(close, 20)` then `e[1]`) fixes all four and is never wrong. Engines before `2026.08.29-zeroindex` index only part of the surface and raise an error for the rest, so pin that version or newer if you rely on it.
 
 ---
 
