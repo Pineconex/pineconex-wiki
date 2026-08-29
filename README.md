@@ -37,18 +37,20 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
   - [The tape.* namespace](#the-tape-namespace)
 - [Sentiment and attention](#sentiment-and-attention)
   - [Attention is not sentiment](#attention-is-not-sentiment)
-  - [The three sources](#the-three-sources)
+  - [The sources](#the-sources)
   - [Reading it in a strategy](#reading-it-in-a-strategy)
     - [The fields](#the-fields)
   - [Turning a count into a threshold](#turning-a-count-into-a-threshold)
   - [Four things to know before you trust a result](#four-things-to-know-before-you-trust-a-result)
 - [Market Data](#market-data)
   - [What a bar contains (OHLCV)](#what-a-bar-contains-ohlcv)
+  - [What a strategy knows about its instrument (syminfo.*)](#what-a-strategy-knows-about-its-instrument-syminfo)
   - [Buying and selling volume (volume delta)](#buying-and-selling-volume-volume-delta)
   - [Price structure: what the market did before your strategy](#price-structure-what-the-market-did-before-your-strategy)
   - [Supported sources](#supported-sources)
   - [Data quality: what is checked when data is fetched](#data-quality-what-is-checked-when-data-is-fetched)
   - [Reading another symbol (request.security)](#reading-another-symbol-requestsecurity-do-not-mix-vendors)
+  - [Company fundamentals (ESEF:)](#company-fundamentals-esef)
 - [Futures](#futures)
   - [What a futures bar carries beyond OHLCV](#what-a-futures-bar-carries-beyond-ohlcv)
   - [Open interest](#open-interest)
@@ -90,9 +92,16 @@ For the trading side rather than the language, the **[Learn hub](https://pinecon
 ### Creating a strategy
 
 1. Click **New strategy**.
-2. Give it a name and paste or write your Pine Script v6 `strategy()` code.
+2. Give it a name and paste or write your Pine Script v6 `strategy()` code, or start from one of the **templates** in the picker.
 3. Click **Validate** to check for syntax errors.
 4. Save. The strategy is now available in the Backtest, Sweep, Validation, and Live launchers.
+
+> **A template's tier is the tier its dependencies already sit behind**, not a pricing choice, and it
+> is computed from the file rather than declared: the templates marked Premium read a second
+> timeframe off their own symbol or need a trained model, and the two marked Pro document a
+> Pro-only live feature (a webhook URL, Telegram notifications). Selling one below what it needs
+> would be a door onto a wall, where the strategy is created and then refused on the one thing it
+> was written to do.
 
 ### Importing from GitHub
 
@@ -1345,6 +1354,17 @@ Sharpe is deliberately **not annualised**: scaling it by trades-per-year needs a
 bot does not have and assumes trades are independent, which they are not. Read it as reward per
 unit of risk, per trade.
 
+**A position that vanishes at the broker is recorded, not forgotten.** A resting stop that filled
+between two polls, a close you made by hand, a margin liquidation: the bot notices at its next sync
+and books the round trip as closed on every broker, so the Open positions page stops showing a
+position your account no longer holds. That stale belief is the dangerous one, because it is what
+makes someone reach for a manual close, and a sell with nothing behind it is a **short**. Where the
+venue gives us no price for that exit (the crypto exchanges reconstruct a cost basis from your fill
+history and have no exit equivalent), the trade is booked **without one** and lands in unscored
+exits: it is reported as having happened, and it is left out of the P&L figures rather than scored
+from a guess. Dropping those instead would bias the record, because a liquidation is not a randomly
+distributed outcome.
+
 Bars under about ten closed trades are flagged: a ranking built on two trades is luck, not edge,
 and the Trades column's `min` filter is the first one to reach for.
 
@@ -1747,7 +1767,43 @@ Pine also derives four **average-price series** from those fields, and you can u
 
 You are not limited to those: any arithmetic on the raw fields is a valid series, so `(high + low + open) / 3` or `close - open` work just as well. Writing `ta.sma(ohlc4, 20)` instead of `ta.sma(close, 20)` gives a moving average that reacts to the whole bar rather than to one instant of it, often a meaningful difference on higher timeframes, where a single closing print carries a lot of noise.
 
+`ta.vwap` takes all three of its arguments: the source, an **anchor** condition that restarts the calculation, and a `stdev_mult` that returns bands with it.
+
+```pine
+v             = ta.vwap(hlc3)                                   // anchored to the UTC day
+sess          = ta.vwap(hlc3, ta.change(time("D")) != 0)        // anchored to your own condition
+[mid, up, lo] = ta.vwap(hlc3, ta.change(time("D")) != 0, 2.0)   // plus two-sigma bands
+```
+
+The result is `na` until the anchor is first true, and the bands are the **volume-weighted** standard deviation about the same running mean, which is what a charting package plots.
+
+> **Pass an anchor on anything that is not a 24-hour market.** The default reset is the **UTC day**, which lands in the middle of the New York afternoon, so an unanchored session VWAP on a US equity restarts mid-session. Nothing fails when it does: the script runs, computes a VWAP and trades it, just not the one you asked for.
+
 > **Volume is not universal.** Equity and crypto sources carry real traded volume, but **FX bars do not**: Saxo returns bid/ask quotes for FX with no trade field, so volume arrives as `0`. A strategy that filters on volume will therefore never trigger on an FX symbol. Check the series before you depend on it. When a daily dataset is resampled to weekly or monthly, volume is **summed** across the period while OHLC is taken as first/max/min/last, which is the correct aggregation.
+
+### What a strategy knows about its instrument (`syminfo.*`)
+
+The bars say what the price did. `syminfo.*` says what the *instrument* is, and the catalog answers it, so a strategy can branch on the kind of thing it is trading rather than on a hardcoded ticker list.
+
+| Field | What it holds |
+|-------|---------------|
+| `syminfo.ticker`, `syminfo.tickerid` | The bare symbol and the fully qualified id (`NYSE:XOM`), split on the `:`. |
+| `syminfo.type` | TradingView's value set: `stock`, `fund`, `index`, `forex`, `futures`, `crypto`, `cfd`, `bond`, `commodity`, `economic`. A branch on it is portable both ways. |
+| `syminfo.description` | The catalog's display name for the row. |
+| `syminfo.currency`, `syminfo.basecurrency` | The quote leg and the base leg: `USD` and `BTC` for `BTCUSD`. They are the same on a cash instrument. |
+| `syminfo.mintick`, `syminfo.pointvalue` | The tick size, and the cash a one-point move is worth on one unit. A full DAX future is EUR 25 against the Micro's EUR 1. |
+| `syminfo.isin` | The instrument's ISIN. A fund is identified by nothing else: two share classes of one fund differ by a letter in the ticker and by the whole tax treatment. |
+| `syminfo.root`, `syminfo.futures_root` | The product root of a futures contract (`FDX`, `ES`), which is what the catalog stores and what the front month is resolved from. |
+| `syminfo.expiration_date` | Contract expiry as a UNIX timestamp in **milliseconds**, matching `time`, so `syminfo.expiration_date - time` is a duration. |
+| `syminfo.tob` | Belgian transaction-tax rate for the instrument, in percent per transaction. |
+
+> **`syminfo.type` used to be wrong, silently, on everything.** Until 2026-08-27 it returned the string `"stock"` on every instrument the platform had ever run, so `syminfo.type == "crypto"` was false on BTCUSD and `== "futures"` false on FDXS: no error, no `na`, just the other branch. `description` and `root` were empty strings and `isin` and `expiration_date` were `na` everywhere. If you have a strategy that branches on any of them, re-read its results.
+
+> **`syminfo.tob` and `syminfo.futures_root` are PineconeX-only.** TradingView has neither, so a script naming one does not compile there. `futures_root` is `root` with `na` semantics: TradingView's `root` answers `""` for a share, so `root != ""` is the portable test and `na(syminfo.futures_root)` is the one that reads like the rest of this platform.
+
+> **`syminfo.tob` is a number for your script to read, not a cost the engine charges.** Pine's percent commission is `(entry + exit) * rate * shares`, linear and two-sided, so it can express neither the tax's per-transaction **cap** nor a one-sided levy. Feeding it straight into `commission_value` is right only where neither of those bites.
+
+> **`expiration_date` is `na` in every batch run**, and that is not a gap: a backtest trades a spliced continuous series where the roll is a step in the data rather than an event. It carries a real date on a live futures bot, and it is the one `syminfo` field that **changes during a run**, updating when the bot [rolls](#contract-rollover) so a strategy is never handed the expiry of a contract it no longer holds.
 
 ### Buying and selling volume (volume delta)
 
@@ -1873,9 +1929,20 @@ The source list offered for a symbol is filtered to the sources that actually ca
 
 #### Perpetual futures are data, not something you can trade here
 
-Crypto **perpetual futures** are in the catalog under **Perpetual Futures (Crypto)**, **(Macro)** and **(Binance)**, and they are fetchable and backtestable but **not live-tradable**. They carry leverage, funding and liquidation, and Pine's cash-equity model knows about none of the three: a perp backtest would show a profit on a strategy the live bot gets liquidated out of, and a bot has no concept of a position vanishing because the *venue* closed it. So the symbol is offered for research and refused at launch.
+Crypto **perpetual futures** are in the catalog under **Perpetual Futures (Crypto)**, **(Macro)** and **(Binance)**, and they are fetchable and backtestable but **not live-tradable**. No broker arm here trades a perpetual, so the symbol is offered for research and refused at launch.
 
 They are worth having because the perp is where the volume is, and because Bitstamp's macro perps are the only place on the platform where gold, silver, WTI, Brent, EUR/USD, QQQ and EWY quote around the clock against USD.
+
+**A backtest on one now books funding and models liquidation.** Those are the two things a perpetual does that a cash-equity model cannot express, and until they existed a perp backtest reported the equity curve of an account that would have been closed out. Both are staged automatically for any backtest, sweep, significance or stress run whose symbols have the stored data, and neither can move a result on an instrument that has no perpetual side:
+
+| | What the engine does |
+|---|---|
+| **Funding** | Each settlement is joined to the bar whose span contains it and booked as cash: a positive rate means longs pay shorts, so a short is credited. It is reported **beside** the price leg as `summary.funding` in `results.json` (`booked`, `booked_pct`, `traded_pnl_pct`, `total_pnl_pct`, and `included_in_net`, which says whether the engine that wrote the file already folded it into net). A carry book is long one leg and short another, so the price legs cancel and the funding *is* the strategy: this is the term that was missing. |
+| **Liquidation** | The position is force-closed on the bar the venue would have closed it, against that venue's maintenance-margin ladder, and the trade is reported with the exit reason **`Liquidated`** rather than folded into stop-losses. It is checked on the bar's adverse **extreme**, not its close, because a wick liquidates you in reality, and it runs **after** the strategy's own exits, because a sane stop sits inside the liquidation level and is crossed first. |
+
+> **A liquidation in a long backtest is a band, not a dated event.** The venue publishes only the ladder in force today and no historical bracket endpoint exists anywhere, so a 2020 bar is margined against a 2026 schedule. Read it as "this position was inside the liquidation band", never as "this position was liquidated on that date". The check also reads last price where the venue triggers on an index-based mark price, so it liquidates slightly more eagerly than the venue does, which is the direction to be wrong in.
+
+This matters most in a **sweep**, which ranks rather than reports: an optimizer with no margin call is actively rewarded for selecting the most over-levered cell in the grid.
 
 > **A perpetual and its spot pair are different instruments that share a name.** `BTCUSDT` is both a Binance spot pair and a Binance perpetual, on different hosts with different histories. The `.P` suffix and the "perpetual future" display name exist so nobody backtests one believing it is the other. The tick differs too: Bitstamp quotes BTC spot to 0.01 and its perp to whole dollars.
 
@@ -1920,6 +1987,50 @@ Three related limits worth knowing:
 - **Backtest and live read different plumbing.** A backtest reads the peer from the stored data catalog; a live bot fetches it from your broker. Same strategy, potentially a different vendor. Validate a cross-symbol strategy against the source you actually intend to trade on.
 - **Peers on different exchanges do not align intraday.** Two venues keep different trading hours and different holiday calendars, so their intraday bars do not correspond even when both are stamped correctly. Daily is fine; intraday across exchanges is not supported.
 
+### Company fundamentals (`ESEF:`)
+
+The catalog carries **accounting factors for 73 Belgian and Dutch listed companies**, under
+*Factors (ESEF)* and addressed `ESEF:ABN`. They are computed from the companies' own inline-XBRL
+annual reports, the ESEF filings every EU issuer has had to publish since FY2020, so like the
+[attention and disclosure series](#sentiment-and-attention) they are derived data rather than an
+instrument: nobody quotes them, we compute them.
+
+Five quantities, one per slot. This is the **one derived series with no field names of its own**, so
+you read it as `open` / `high` / `low` / `close` / `volume` and have to know this table:
+
+| Slot | Quantity | Definition |
+|------|----------|------------|
+| `open` | Operating profitability | operating result / book equity |
+| `high` | Investment | year-on-year growth in total assets |
+| `low` | Book-to-market | book equity / market capitalisation at the available date |
+| `close` | Size | market capitalisation, EUR |
+| `volume` | Share count | profit attributable to owners / basic EPS |
+
+```pine
+bm = request.security("ESEF:ABN", "1D", low)    // book-to-market
+op = request.security("ESEF:ABN", "1D", open)   // operating profitability
+```
+
+> **A factor row must never end up in a book's tradable legs, and the obvious guard does not
+> work.** Test `syminfo.tickerid`, never `syminfo.ticker`: `syminfo` splits on the `:`, so
+> `ESEF:WDP` has the bare ticker `WDP` and matches the price row's own name. Before that guard,
+> `ESEF:WDP` was traded as an instrument, entering at 0.166 (the `open` slot, operating
+> profitability) and exiting at 4,799,376,734 (the `close` slot, market capitalisation), booking
+> +574,618,885,032% and swamping every arm of the run into identical nonsense. The rows are marked
+> non-tradable so a live bot refuses them, but a backtest reads whatever series you point it at.
+
+> **Every value is point-in-time.** A figure is forward-filled from the date its filing was
+> *published*, never from the fiscal period end, and is never back-filled. A FY2022 number does not
+> exist on 2022-12-31; it exists when the report appears. Filling from the fiscal date is silent
+> lookahead with a perfectly plausible equity curve.
+
+> **History is the binding limit, not the plumbing.** ESEF is mandatory only from FY2020, so each
+> name carries four or five annual observations. That is enough to rank a cross-section today and
+> trade it forward. It is **not** enough to backtest a factor sort, which needs the factor to vary
+> across names *and* across time. Values are EUR throughout: facts reported in USD or GBP were
+> dropped at build time, because size and book-to-market are not currency-invariant (the two ratios
+> are).
+
 ### Data retention
 
 Fetched market data is cached so repeat jobs run instantly without re-downloading. A dataset that hasn't been used by any job for an extended period is automatically removed from the catalog to save storage. Nothing is lost permanently: the next backtest, sweep, or validation run that needs it simply re-fetches it from the source, and any dataset that is still in regular use is never evicted.
@@ -1928,11 +2039,14 @@ Fetched market data is cached so repeat jobs run instantly without re-downloadin
 
 ## Sentiment and attention
 
-The catalog carries three non-price series alongside market data. Two measure **attention**, which is
-how many people looked a company up on Wikipedia and how often it was posted about on Reddit. The
-third measures **disclosure**, which is what company officers did with their own money and were
-legally required to report. All three are ordinary datasets fetched from the Data page and read from
-a strategy with `request.security`, so nothing new has to be wired up to use them.
+The catalog carries five non-price series alongside market data. Three measure **attention**, which is
+how many people looked a company up on Wikipedia, how often it was posted about on Reddit, and how
+much it was searched for on Google. One measures **disclosure**, which is what company officers did
+with their own money and were legally required to report. The last is a **market-wide** sentiment
+index rather than a reading on any one instrument. All five are ordinary datasets fetched from the
+Data page and read from a strategy with `request.security`, so nothing new has to be wired up to use
+them. (A sixth prefix, [`ESEF:`](#company-fundamentals-esef), carries accounting factors and is
+documented with the market data it belongs beside.)
 
 ### Attention is not sentiment
 
@@ -1950,17 +2064,21 @@ trivially poisoned by coordinated posting, because a bot writing "bullish" is re
 no human holds. A **count** does not have that weakness. If a ticker is flooded, discussion volume
 genuinely did spike, and that is a fact worth measuring whoever caused it. Counting is also
 reproducible: re-fetch the same range next year and you get the same numbers, which a language model
-or a sentiment lexicon cannot promise.
+or a sentiment lexicon cannot promise. (Google Trends is the exception, and not because it is not a
+count: Google rescales and samples what it hands back, so the same day returns a different number on
+a different day. See the note below the table.)
 
-### The three sources
+### The sources
 
 | Symbol | What it measures | History | Covers |
 |--------|------------------|---------|--------|
 | `WIKI:` | Pageviews of the company's article, excluding bots | 2015-07-01 onward | Anything with an article, worldwide |
 | `REDDIT:` | Posts mentioning the ticker across r/wallstreetbets, r/stocks and r/investing | 2005 onward | US retail names |
+| `GOOGLE:` | Google Trends search interest for a recorded search term | As far back as you ask, chained from eight-month windows and stopping where the term's interest does | Anything with a mapped search term |
 | `SECFORM4:` | Insider open-market purchases and sales, in dollars | 2003 onward | US-registered issuers only |
+| `CNN:FEARGREED` | CNN's Fear & Greed index, score and band | A rolling **one year**, deepened by re-fetching | The whole US market, not an instrument |
 
-All three are daily only. None has an intraday equivalent.
+All five are daily only. None has an intraday equivalent.
 
 `SECFORM4:` covers **US-registered issuers only**, and that is a hard limit rather than a gap in our
 mapping. A foreign private issuer files a 20-F and is exempt from Section 16 entirely, so it never
@@ -1968,16 +2086,36 @@ files a Form 4 at any date. ASML returns zero against Microsoft's 727. The Europ
 (managers' transactions under MAR Article 19) lives in a separate register per country and is not
 carried here.
 
+`CNN:FEARGREED` is the first **market-wide** series here, which is why it has no ticker: the prefix
+names who published the number and `FEARGREED` is what CNN publishes. Its values are absolute 0-100
+readings, so two fetches agree on any day they share and merging them is trivially correct. It only
+carries a rolling year, so its history deepens by being fetched repeatedly rather than by asking for
+a wider range.
+
+> **`GOOGLE:` is the one series on the platform that is not reproducible, and that is Google's
+> property rather than our fetcher's.** The public endpoint scales every response 0-100 against the
+> maximum in the requested window and draws from a sample, so the same day comes back with a
+> different value depending on what else was asked for and when. Daily data is only served for
+> windows of eight months or less, so a long history is a chain of windows rescaled onto each other
+> through their overlaps: values are not capped at 100 afterwards, only ratios *within* the series
+> mean anything, and the error compounds toward the far end. Every other dataset here returns the
+> same numbers when re-fetched, which is what `perm_seed`, the bootstrap and every stored
+> `results.json` assume. Treat a backtest over this series as a measurement of one draw.
+
 ### Fetching it
 
 Data page, pick the attention symbol, choose the source, Fetch. It behaves exactly like a price
 dataset: it merges into whatever is already stored rather than replacing it, so a narrow top-up
 extends the series instead of truncating it.
 
-A symbol only offers the source if it has been mapped, because neither identifier can be derived from
-the ticker. Wikipedia needs an article title (`GME` is `GameStop`, `AMZN` is `Amazon (company)`) and Reddit
-needs a search term, which for tickers that are also ordinary English words (`A`, `IT`, `ON`, `ALL`,
-`NOW`, `PLAY`) has to be the cashtag form or the series fills with unrelated posts.
+A symbol only offers the source if it has been mapped, because none of these identifiers can be
+derived from the ticker. Wikipedia needs an article title (`GME` is `GameStop`, `AMZN` is
+`Amazon (company)`), Reddit needs a search term, which for tickers that are also ordinary English
+words (`A`, `IT`, `ON`, `ALL`, `NOW`, `PLAY`) has to be the cashtag form or the series fills with
+unrelated posts, and Google Trends needs one too: `NVDA` and `NVDA stock` return materially
+different series and there is no principled way to choose between them, so the choice is recorded
+per symbol rather than guessed. Picking whichever one backtests best is a researcher degree of
+freedom.
 
 ### Reading it in a strategy
 
@@ -1986,7 +2124,9 @@ Derived series have their **own symbols**, prefixed by the publisher, and their 
 ```pine
 views  = request.security("WIKI:ASML",     "1D", pageviews)
 posts  = request.security("REDDIT:GME",    "1D", mentionCount)
+search = request.security("GOOGLE:NVDA",   "1D", searchInterest)
 flow   = request.security("SECFORM4:MSFT", "1D", insiderFlowUsd)
+mood   = request.security("CNN:FEARGREED", "1D", fearGreedScore)
 ```
 
 The prefix names **who published the number**, not what it measures, and that is deliberate. A single
@@ -2001,13 +2141,16 @@ Every dataset on the platform is stored as five columns, because that is what a 
 series has no prices to put in them, so each column carries a different figure and each has a name
 that says what it holds. **You never write `open` or `close` on these symbols.**
 
-| Column | `WIKI:` | `REDDIT:` | `SECFORM4:` |
-|--------|---------|-----------|-------------|
-| 1 | `pageviews` | `mentionCount` | `insiderFlowUsd` |
-| 2 | `mobileViews` | `mentionScore` | `transactionShares` |
-| 3 | `desktopViews` | `mentionComments` | `transactionPricePerShare` |
-| 4 | `spiderViews` | `topAuthorPosts` | `insiderSharesHeld` |
-| 5 | `pageEdits` | `distinctAuthors` | `transactionCount` |
+| Column | `WIKI:` | `REDDIT:` | `GOOGLE:` | `SECFORM4:` | `CNN:` |
+|--------|---------|-----------|----------|-------------|--------|
+| 1 | `pageviews` | `mentionCount` | `searchInterest` | `insiderFlowUsd` | `fearGreedScore` |
+| 2 | `mobileViews` | `mentionScore` | `searchInterestRaw` | `transactionShares` | `fearGreedBand` |
+| 3 | `desktopViews` | `mentionComments` | `windowsCovering` | `transactionPricePerShare` | — |
+| 4 | `spiderViews` | `topAuthorPosts` | — | `insiderSharesHeld` | — |
+| 5 | `pageEdits` | `distinctAuthors` | — | `transactionCount` | — |
+
+A source with fewer quantities than slots leaves the rest repeating another column, and **no name is
+registered for them**: a strategy addresses what exists and cannot name what does not.
 
 **Wikipedia.** `pageviews` is human traffic (crawlers are excluded at the source). The split into
 `mobileViews` and `desktopViews` is a rough proxy for who is looking, since retail skews mobile.
@@ -2054,6 +2197,19 @@ with 400 million.
 > of six transactions were not trades at all. Counting those is what produces the "insiders are
 > dumping" headline every time a grant vests.
 
+**Google Trends.** `searchInterest` is the stitched, rescaled figure and is the one to read.
+`searchInterestRaw` is the 0-100 value as Google returned it before rescaling, and `windowsCovering`
+is how many fetched windows contained that day, `2` on an overlap. Those two are kept so the
+stitching is auditable: a day sitting on an overlap is an anchor, and a day covered by a single
+window inherits whatever error the chain had accumulated by then. Only ratios within the series mean
+anything, so threshold it the same way as any other count, on its own baseline.
+
+**CNN Fear & Greed.** `fearGreedScore` is the 0-100 float (the page you may have seen rounds it to
+an integer) and `fearGreedBand` is CNN's own rating as an ordinal: `1` extreme fear, `2` fear, `3`
+neutral, `4` greed, `5` extreme greed. The band is CNN's string mapped straight across, never
+re-derived from the score, because the thresholds are theirs and have moved before. It describes the
+market, so it is the same series for every instrument you read it against.
+
 > A prefixed symbol never falls back to the bare ticker. Writing `WIKI:ABN` when no such symbol
 > exists is an error, not a quiet substitution of ABN's price series. That fallback exists for
 > exchange prefixes (`NASDAQ:NVDA` finding `NVDA`) and would be actively dangerous here, since the
@@ -2093,7 +2249,7 @@ rather than assume it.
 over, so it is stamped on the following session. You do not need to write `[1]` to avoid look-ahead;
 it has already been done.
 
-**Weekends are invisible.** Both series have a value for every calendar day, but markets do not.
+**Weekends are invisible.** The attention series have a value for every calendar day, but markets do not.
 After the shift, Friday's and Saturday's counts land on days with no trading bar and are never read,
 so Monday sees Sunday's figure alone. Roughly 28% of the calendar does not reach a strategy, and
 weekend interest is exactly when retail attention builds.
@@ -2106,7 +2262,9 @@ Measured on this catalog: ASML drew 128 Reddit posts across a full year, with a 
 and its Wikipedia article averages under 200 views a day, which is below the level at which daily
 variation means anything. A European industrial with a flat attention series is not being ignored by
 the market; it is not being measured by these sources. Treat a quiet series for a non-US listing as
-absent data, and prefer price and fundamentals for those names.
+absent data, and prefer price and fundamentals for those names. Google Trends is fetched with a
+**US** geography for the same reason, and CNN's index is a US-market reading by construction;
+Wikipedia is the only one of the five that counts the whole world.
 
 
 ---
@@ -2115,7 +2273,11 @@ absent data, and prefer price and fundamentals for those names.
 
 The catalog carries **21 European index and bond futures** from Saxo, grouped by the currency they
 settle in: *Futures (EUR)*, *Futures (CHF)* and *Futures (USD)*. Alongside them sit the CME contracts
-used for prop-firm trading.
+used for prop-firm trading. There are **two execution venues**: the Eurex contracts below trade
+through a connected [Saxo](#saxo-bank) account and the CME contracts through a
+[prop-firm](#prop-firm-futures-tradovate) account, and neither venue carries the other's products. A
+set of **Euronext** index futures (AEX and its mini, AMX, BEL 20, the CAC weeklies, FTSE MIB and its
+minis) sits in the same groups as **data only**.
 
 | Group | Contracts |
 |-------|-----------|
@@ -2221,6 +2383,10 @@ on the launch form:
 | **On** | The bot closes at market in the expiring month and re-opens the same side and size in the new one, then re-reads the cost basis from the broker |
 | **Off** | The bot keeps trading the old month and warns. Close the position and relaunch on the new contract yourself |
 
+A roll whose closing trade is refused is **abandoned, not half-done**: the bot stays in the expiring
+contract and says so. Switching while still holding the old month would leave a position it could no
+longer address.
+
 > **A roll is two real trades, and your strategy never backtested them.** It pays the spread twice
 > and inherits the price gap between the two contracts. A backtest saw none of that: the batch
 > engines run on a spliced continuous series where the roll is a step in the data, not a pair of
@@ -2245,10 +2411,14 @@ and flat overnight, turning it off costs nothing, because there is rarely a posi
 
 ### Two things to know before you trust a result
 
-> **These rows are for data, not for trading.** A futures contract can only be traded here through a
-> [prop-firm account](#prop-firm-futures-tradovate), and that gateway serves CME products. The
-> European contracts are marked accordingly and a live bot refuses to launch on them, so use them to
-> research, to build a regime filter, or to read one instrument while trading another.
+> **Which of these you can trade depends on the venue, and some rows are data only.** The Eurex
+> contracts trade through a connected [Saxo account](#saxo-bank) and the CME contracts through a
+> [prop-firm account](#prop-firm-futures-tradovate); no other broker here accepts a futures row, and
+> a live bot refuses one by name rather than guessing. Locked on purpose: the **CAC 40 Dividend**
+> future, which settles on the dividend points the index pays over a calendar year and so has no
+> relationship to the index's price path, and the **Euronext** rows, which have never placed an
+> order at Saxo. Every row is research data whatever its execution path, and reading one instrument
+> while trading another needs none.
 
 > **A continuous series is spliced, not adjusted.** Every futures contract expires, so the long
 > history you see is successive contracts joined end to end. At each roll the level steps by the
@@ -2270,6 +2440,19 @@ Connect a broker under **Account** or on the **Live** page.
 3. After authorisation, your account is linked. Select which Saxo account to trade on.
 
 > The simulation environment (`sim`) uses Saxo's paper-trading gateway. Recommended for testing before going live.
+
+**Saxo also trades the Eurex index and bond [futures](#futures)**, which nothing else here does: the
+prop-firm gateway is CME-only, so those contracts had no execution path at all before this. The
+catalog stores the product **root** (`FDX`, `AEX`) rather than a delivery month, and the bot asks
+Saxo which month is front when it launches, so a mapping cannot rot when a contract expires. See
+[Contract rollover](#contract-rollover) for what happens at the switch.
+
+> **Treat Saxo futures as a preview and run it on the simulation environment first.** The resolution,
+> the launch path and the roll are implemented and unit-tested; what has not yet happened is a real
+> order at Saxo on a futures contract. Check the first order against Saxo's own order list, and check
+> that the contract the bot names is the one you meant: the DAX complex is three products whose roots
+> nest (FDX, FDXM, FDXS at EUR 25, 5 and 1 per point), so the wrong family fills quietly and sizes
+> the position twenty-five times out.
 
 ### Alpaca
 
@@ -2314,7 +2497,7 @@ Binance is a crypto **exchange** for USDT spot pairs. Like Bitstamp, your coins 
 
 Four things about Binance worth knowing before you launch a bot on it:
 
-- **A spot holding is a balance, not a position** — exactly as on Bitstamp. Binance stores no average entry price, so the bot reconstructs your cost basis from your fill history and **refuses to trade a holding it cannot price**, such as coins you deposited rather than bought. Fund a Binance bot's account by buying the coin.
+- **A spot holding is a balance, not a position**, exactly as on Bitstamp. Binance stores no average entry price, so the bot reconstructs your cost basis from your fill history and **refuses to trade a holding it cannot price**, such as coins you deposited rather than bought. Fund a Binance bot's account by buying the coin.
 - **It rests one exit, and that exit is the stop.** A resting sell reserves the base balance, so a second leg is refused. The stop goes to the exchange, and the take-profit is checked by the bot at bar close.
 - **The fee is taken in the coin.** Order 0.001 BTC and you own slightly less, so every exit is sized from what the exchange says you hold rather than from what the bot ordered. This is the opposite of Bitstamp, where the fee comes out of the cash.
 - **Pairs are quoted in USDT.** See [Crypto](#crypto) for what that means for a backtest that ran on USD bars.
