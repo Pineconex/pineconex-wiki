@@ -272,7 +272,7 @@ Set it explicitly (0–5000) only when the depth can't be known ahead of time, e
 
 > Built-in series (`close[n]`, …) and `ta.*` functions always see full history regardless of this setting; it only bounds *user-variable* lookback.
 
-> **Indexing an indicator's past value:** assign it to a **variable first**, then index the variable: `e = ta.ema(close, 20)` then `e[1]`. Indexing the call directly (`(ta.ema(close, 20))[1]`) returns `na` on PineconeX, unlike TradingView.
+> **Indexing a past value** behaves as it does on TradingView: `ta.rsi(close, 14)[1]`, `(close > open)[1]`, `math.sum(close, 5)[1]`, `close[1][1]`, `(cond ? a : b)[1]` and `strategy.equity[1]` all work. Four things refuse, each with a clear error rather than a wrong number: a **tuple** (`ta.macd(...)[1]` — destructure it first with `[m, s, h] = ta.macd(...)`, which is how TradingView works too), **`barstate.*` / `session.*`**, a **user-defined function** whose body is just a bool or a number, and **`timeframe.change()`**. Assigning to a variable first and indexing that (`e = ta.ema(close, 20)` then `e[1]`) fixes all four and is never wrong. Engines older than 2026-08-29 index only about half the `ta.*` surface and raise an error for the rest.
 
 ---
 
@@ -351,7 +351,7 @@ A few things to know:
 
 - **`str.tostring(value, "0.00")`** applies a format string, here two decimal places. Handy for prices and indicator values that would otherwise print a long float.
 - **Booleans and `na` print directly.** `str.tostring(cross_up)` gives `true` / `false`, and a `na` value prints as `na`, so you can see exactly when a value is missing.
-- **Series and `ta.*` results log their current-bar value automatically.** You don't need to index them: `str.tostring(ta.rsi(close, 14))` prints this bar's RSI. (To inspect a *past* value, assign it to a variable first and index that: `r = ta.rsi(close, 14)` then `str.tostring(r[1])`; see the note on [indexing indicator values](#history-buffer-max_bars_back).)
+- **Series and `ta.*` results log their current-bar value automatically.** You don't need to index them: `str.tostring(ta.rsi(close, 14))` prints this bar's RSI. (To inspect a *past* value: `str.tostring(ta.rsi(close, 14)[1])`, or assign it to a variable first and index that — see the note on [indexing indicator values](#history-buffer-max_bars_back).)
 - **No `{0}` placeholders.** Unlike TradingView, PineconeX does not support format-placeholder logging (`log.info("x={0}", x)`); only the first argument is read, so build the whole string with `+`.
 
 ### Tracing *why* a signal did or didn't fire
