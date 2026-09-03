@@ -29,6 +29,7 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
   - [Performance](#performance)
   - [Order flow: what each broker supports](#order-flow-what-each-broker-supports)
   - [Execution routing](#execution-routing)
+  - [Delaying order submission (runtime.sleep)](#delaying-order-submission-runtimesleep)
   - [Options routing (Alpaca)](#options-routing-alpaca)
   - [Multi-symbol baskets](#multi-symbol-baskets)
   - [Crypto](#crypto)
@@ -1479,6 +1480,56 @@ The **Execution routing** card on the launch form decides where a signal ends up
 | **Options routing** | Alpaca only. Each signal is scored across the shares and the option chain, and the better expression is placed. See below. |
 
 > If a third-party platform executes off your webhook, **it owns the real position**. PineconeX then only tracks its own simulated one, which can drift from your actual account.
+
+### Delaying order submission (`runtime.sleep`)
+
+A bot submits its orders the moment it notices a bar has closed. That is fine for one account, but
+it has a side effect worth knowing about: for a given bot, the gap between the bar close and the
+order is very nearly the *same* on every single bar. The orders land on a metronome.
+
+`runtime.sleep(ms)` breaks that up. Call it in your strategy and the bot holds the orders that bar
+produced for the number of milliseconds you ask for, then submits them:
+
+```pine
+//@version=6
+strategy("Delayed submission", overlay = true)
+
+// A different, repeatable delay on every bar, anywhere from 30 to 240 seconds.
+seed  = input.int(7, "Delay seed")
+h     = math.sin(bar_index * 12.9898 + seed * 78.233) * 43758.5453
+u     = h - math.floor(h)
+delay = 30000 + u * 210000
+runtime.sleep(delay)
+
+if ta.crossover(close, ta.sma(close, 20))
+    strategy.entry("L", strategy.long)
+```
+
+**It only ever affects a live bot.** A backtest, a sweep, a significance run and a stress run all
+read the request and ignore it, because a bar-resolution simulation has no prices between one bar
+close and the next, so there is nothing to fill at a sub-bar offset. The backtest says so once in
+its log rather than passing over it silently, since unchanged fills could otherwise be read as
+evidence that a delay costs nothing. **Adding it to a strategy cannot change a single number in any
+result you have already recorded.**
+
+Four things to know before you use it:
+
+- **It is capped at the length of one bar.** A delay that outran the bar would submit an order for a
+  decision the next bar has already replaced, and the next bar posts its own request, so the two
+  would overlap. On a 5 minute chart anything above 300000 ms is cut to 300000.
+- **It is refused outright on a `calc_on_every_tick` strategy**, with a warning in the job log. A
+  tick strategy exists to act the instant its signal becomes true, so holding its order back asks
+  for the opposite of what it declared. See [Tick data vs. bar data](#tick-data-vs-bar-data).
+- **It never delays an exit.** Stops, targets, the risk halt and the end of session flatten are all
+  handled before the delay is applied, so getting *out* of a position is never postponed.
+- **Give every account its own seed.** Two bots on the same seed draw the same delay for the same
+  bar, which puts their orders back in lockstep and recreates exactly the pattern the delay is
+  there to remove.
+
+Note that your bot already submits somewhat after the bar close without asking: it polls for new
+bars on a timer, so it notices a completed bar up to half a bar late. `runtime.sleep` adds to that
+offset rather than replacing it, and what it really changes is that the offset stops being
+constant.
 
 ### Options routing (Alpaca)
 
