@@ -15,6 +15,8 @@ PineconeX is a SaaS platform for backtesting and live-trading **Pine Script® v6
   - [Learning Pine Script v6](#learning-pine-script-v6)
   - [Write-protected strategies](#write-protected-strategies)
   - [Same-bar stop and target (the bar magnifier)](#same-bar-stop-and-target-the-bar-magnifier)
+  - [Time zones and sessions](#time-zones-and-sessions)
+    - [Asking the instrument instead of naming a zone](#asking-the-instrument-instead-of-naming-a-zone)
 - [Backtest](#backtest)
 - [Debugging with log.info()](#debugging-with-loginfo)
 - [Parameter Sweep](#parameter-sweep)
@@ -87,6 +89,16 @@ PineconeX runs standard **Pine Script v6**, so the official TradingView document
 - **[TradingView Community Scripts](https://www.tradingview.com/scripts/)**. Thousands of published open-source strategies and indicators to learn from and adapt.
 
 For the trading side rather than the language, the **[Learn hub](https://pineconex.com/learn)** collects the books, talks and guides we recommend on systematic trading, backtesting and validation.
+
+> **v6 only.** A community script written for v4 or v5 is refused here, and most published scripts
+> still are. If you have a TradingView account, its Pine Editor will convert one for you (open the
+> script, then **Convert code to v6**), and that is the fastest route. Otherwise change
+> `//@version=5` to `//@version=6` and re-validate: the validator reads your source and names the
+> specific constructs in it that v6 removed, with what to write instead, so you fix the lines it
+> lists rather than reading a migration guide end to end. Two changes have nothing to grep for and
+> are always mentioned: `margin_long` and `margin_short` default to 100 in v6 where they were 0 in
+> v5 (so an implicitly leveraged strategy reports different numbers), and a `bool` can no longer
+> hold `na`.
 
 > **PineconeX runs Pine headless.** There is no chart, so chart/UI calls (`plot`, `hline`, drawings, tables, …) are accepted but silently ignored, and a few primitives diverge from TradingView (e.g. `alertcondition()` is repurposed for notifications). The language is the same; the runtime is backtest/live execution rather than a chart. These differences are called out throughout this guide where they matter.
 
@@ -274,6 +286,74 @@ Set it explicitly (0–5000) only when the depth can't be known ahead of time, e
 > Built-in series (`close[n]`, …) and `ta.*` functions always see full history regardless of this setting; it only bounds *user-variable* lookback.
 
 > **Indexing a past value** behaves as it does on TradingView: `ta.rsi(close, 14)[1]`, `(close > open)[1]`, `math.sum(close, 5)[1]`, `close[1][1]`, `(cond ? a : b)[1]`, `strategy.equity[1]` and `ta.obv[1]` all work, and `expr[0]` is always the expression itself. Four things refuse, each with a clear error rather than a wrong number: a **tuple** at a non-zero offset (`ta.macd(...)[1]` — destructure it first with `[m, s, h] = ta.macd(...)`, which is how TradingView works too), **`barstate.*` / `session.*`**, a **user-defined function** whose body is just a bool or a number, and **`timeframe.change()`**. Assigning to a variable first and indexing that (`e = ta.ema(close, 20)` then `e[1]`) fixes all four and is never wrong. Engines before `2026.08.29-zeroindex` index only part of the surface and raise an error for the rest, so pin that version or newer if you rely on it.
+
+
+### Time zones and sessions
+
+**Every bar is stamped in UTC**, and the bare `hour`, `minute`, `dayofweek` and `dayofmonth`
+variables read that stamp. TradingView reports them in the exchange's own time, so this is a real
+difference and it is silent: a gate written as `hour == 9` is a 09:00 **UTC** gate here, which on a
+US equity is four or five hours before the open depending on the month.
+
+The fix is not to shift the variable. It is to ask for the time zone you mean:
+
+```pine
+inRTH  = not na(time(timeframe.period, "0930-1600", "America/New_York"))
+nyHour = hour(time, "America/New_York")
+gate   = timestamp("America/New_York", 2024, 1, 2, 9, 30)
+```
+
+| form | what the time zone does |
+|---|---|
+| `time(tf, session, tz)` | reads the session window on that zone's wall clock, and returns `na` outside it |
+| `hour(t, tz)`, `minute(t, tz)`, `dayofweek(t, tz)`, `dayofmonth(t, tz)`, `month(t, tz)`, `year(t, tz)` | converts the instant before splitting it, so the day can change as well as the hour |
+| `timestamp(tz, year, month, day, hour, minute)` | reads the components as a **local wall clock** in that zone, not as UTC |
+| `str.format_time(t, format, tz)` | formats the stamp on that zone's clock, so the printed date can differ from the UTC one |
+
+Both spellings are accepted: an IANA name (`"America/New_York"`, `"Europe/London"`, `"Asia/Tokyo"`)
+or a fixed offset (`"UTC+2"`, `"GMT-5"`, `"+02:00"`).
+
+**Prefer the name.** A fixed offset is frozen, so `"UTC-5"` is New York in January and an hour wrong
+from March to November. A name carries the transition dates, including the ones that have since
+changed: US daylight saving moved in 2007 (it used to begin in April, it now begins in March), and
+Moscow left daylight saving entirely in 2011. Backtests here routinely run over decades, so a frozen
+offset is wrong for a large part of the history it is applied to, on every intraday bar, without
+failing.
+
+> **A name that does not exist is refused, not quietly treated as UTC.** The names are
+> case-sensitive and use an underscore, so `"America/New York"` and `"america/new_york"` are both
+> errors. That is deliberate: a session an hour out produces numbers that look entirely reasonable.
+
+> **Older engines did not do any of this.** `time()` refused every named zone outright, while
+> `timestamp()`, `hour()` and `str.format_time()` accepted one and ignored it, returning the UTC
+> answer under the name you had asked to convert. If a strategy of yours computes daylight saving
+> by hand to work around that, you can delete the arithmetic and pass the name.
+
+### Asking the instrument instead of naming a zone
+
+`syminfo.timezone` answers with the **listing exchange's** zone, so the TradingView idiom works
+unchanged and a strategy stays portable across instruments:
+
+```pine
+inRTH = not na(time(timeframe.period, "0930-1600", syminfo.timezone))
+```
+
+That reads the New York session on a US listing and the Frankfurt session on a German one, from the
+same source line. 98% of the catalog carries a zone; the exceptions are the rows that have no
+exchange at all (`WIKI:` pageviews, `ESEF:` fundamentals, `SECFORM4:`, `CNN:`), and those answer
+`"UTC"`.
+
+> **This changed on 2026-09-03, and it changes results.** `syminfo.timezone` was the string
+> `"UTC"` on every instrument before that date, so any strategy passing it to `time()` or
+> `timestamp()` was gating on a UTC window rather than the exchange's. Nothing failed and nothing
+> warned: the script ran, traded, and reported plausible numbers on the wrong hours. If you have
+> figures for such a strategy from before that date, re-measure them. The strategy now does what
+> its source reads as doing, which on a US listing is a window four or five hours from where it
+> actually sat.
+
+`time_close(timeframe, session, timezone)` takes the same three arguments as `time()` and returns
+the period's **closing** stamp rather than its open. The bare `time_close` variable is a different
+thing and keeps its own meaning: the close time of the current bar.
 
 ---
 
